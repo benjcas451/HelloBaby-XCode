@@ -1,0 +1,318 @@
+name: Upload to App Store Connect (TestFlight)
+
+# Baut eine signierte iOS-IPA und lädt sie nach App Store Connect / TestFlight
+# hoch. Ausschließlich manuell über "Run workflow" startbar. Voraussetzung:
+# GitHub Environment "app-store" mit denselben sechs Secrets wie im früheren
+# Flutter-Repo (dort einmalig hierher kopieren).
+
+on:
+  workflow_dispatch:
+
+# Nur ein Upload gleichzeitig – parallele Builds würden kollidierende
+# Buildnummern erzeugen bzw. sich gegenseitig überholen.
+concurrency:
+  group: upload-app-store
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  upload:
+    name: Build & upload signed IPA
+    runs-on: macos-latest
+    environment: app-store
+
+    env:
+      BUNDLE_ID: ch.tschir.HelloBaby
+      TEAM_ID: 2HNRMGYGMU
+      MARKETING_VERSION: 3.0.0
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Secrets früh validieren – ohne jemals einen Wert zu loggen.
+      - name: Validate required secrets
+        env:
+          APP_STORE_CONNECT_API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
+          APP_STORE_CONNECT_API_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_API_ISSUER_ID }}
+          APP_STORE_CONNECT_API_KEY_BASE64: ${{ secrets.APP_STORE_CONNECT_API_KEY_BASE64 }}
+          IOS_DISTRIBUTION_CERTIFICATE_BASE64: ${{ secrets.IOS_DISTRIBUTION_CERTIFICATE_BASE64 }}
+          IOS_DISTRIBUTION_CERTIFICATE_PASSWORD: ${{ secrets.IOS_DISTRIBUTION_CERTIFICATE_PASSWORD }}
+          IOS_PROVISIONING_PROFILE_BASE64: ${{ secrets.IOS_PROVISIONING_PROFILE_BASE64 }}
+        run: |
+          set -euo pipefail
+          missing=()
+          for name in \
+            APP_STORE_CONNECT_API_KEY_ID \
+            APP_STORE_CONNECT_API_ISSUER_ID \
+            APP_STORE_CONNECT_API_KEY_BASE64 \
+            IOS_DISTRIBUTION_CERTIFICATE_BASE64 \
+            IOS_DISTRIBUTION_CERTIFICATE_PASSWORD \
+            IOS_PROVISIONING_PROFILE_BASE64; do
+            if [ -z "${!name:-}" ]; then
+              missing+=("$name")
+            fi
+          done
+          if [ "${#missing[@]}" -ne 0 ]; then
+            echo "::error::Fehlende Secrets im Environment 'app-store': ${missing[*]}"
+            exit 1
+          fi
+          echo "Alle sechs erforderlichen Secrets sind gesetzt."
+
+      # Buildnummer: 100 + run_number – eindeutig, monoton, sicher über den
+      # Buildnummern der früheren Flutter-App.
+      - name: Set build number
+        run: |
+          echo "BUILD_NUMBER=$((100 + ${{ github.run_number }}))" >> "$GITHUB_ENV"
+          echo "Buildnummer: $((100 + ${{ github.run_number }}))"
+
+      # Temporäre Keychain anlegen und Apple-Distribution-Zertifikat (.p12)
+      # für codesign importieren. Zufälliges Keychain-Passwort, maskiert.
+      - name: Create keychain and import signing certificate
+        env:
+          IOS_DISTRIBUTION_CERTIFICATE_BASE64: ${{ secrets.IOS_DISTRIBUTION_CERTIFICATE_BASE64 }}
+          IOS_DISTRIBUTION_CERTIFICATE_PASSWORD: ${{ secrets.IOS_DISTRIBUTION_CERTIFICATE_PASSWORD }}
+        run: |
+          set -euo pipefail
+
+          CERT_PATH="$RUNNER_TEMP/distribution_certificate.p12"
+          KEYCHAIN_PATH="$RUNNER_TEMP/app-signing.keychain-db"
+
+          KEYCHAIN_PASSWORD="$(openssl rand -base64 24)"
+          echo "::add-mask::$KEYCHAIN_PASSWORD"
+
+          printf '%s' "$IOS_DISTRIBUTION_CERTIFICATE_BASE64" | base64 --decode -o "$CERT_PATH"
+
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+
+          security import "$CERT_PATH" \
+            -P "$IOS_DISTRIBUTION_CERTIFICATE_PASSWORD" \
+            -A -t cert -f pkcs12 \
+            -T /usr/bin/codesign \
+            -T /usr/bin/security \
+            -k "$KEYCHAIN_PATH"
+
+          security set-key-partition-list \
+            -S apple-tool:,apple: \
+            -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH" >/dev/null
+
+          existing="$(security list-keychains -d user | sed -e 's/[\"[:space:]]//g')"
+          # shellcheck disable=SC2086
+          security list-keychains -d user -s "$KEYCHAIN_PATH" $existing
+
+          if ! security find-identity -v -p codesigning "$KEYCHAIN_PATH" | grep -q "Apple Distribution\|iPhone Distribution"; then
+            echo "::error::Keine gültige Distribution-Signing-Identity in der Keychain gefunden."
+            security find-identity -v -p codesigning "$KEYCHAIN_PATH" || true
+            exit 1
+          fi
+
+          echo "KEYCHAIN_PATH=$KEYCHAIN_PATH" >> "$GITHUB_ENV"
+          echo "CERT_PATH=$CERT_PATH" >> "$GITHUB_ENV"
+          echo "Signing-Identity erfolgreich importiert."
+
+      # Provisioning Profile installieren und gegen die Sollwerte prüfen.
+      - name: Install and verify provisioning profile
+        env:
+          IOS_PROVISIONING_PROFILE_BASE64: ${{ secrets.IOS_PROVISIONING_PROFILE_BASE64 }}
+        run: |
+          set -euo pipefail
+
+          PP_PATH="$RUNNER_TEMP/profile.mobileprovision"
+          PP_PLIST="$RUNNER_TEMP/profile.plist"
+
+          printf '%s' "$IOS_PROVISIONING_PROFILE_BASE64" | base64 --decode -o "$PP_PATH"
+          security cms -D -i "$PP_PATH" -o "$PP_PLIST"
+
+          PP_UUID="$(/usr/libexec/PlistBuddy -c 'Print :UUID' "$PP_PLIST")"
+          PP_NAME="$(/usr/libexec/PlistBuddy -c 'Print :Name' "$PP_PLIST")"
+          PP_TEAM="$(/usr/libexec/PlistBuddy -c 'Print :TeamIdentifier:0' "$PP_PLIST")"
+          PP_APPID="$(/usr/libexec/PlistBuddy -c 'Print :Entitlements:application-identifier' "$PP_PLIST")"
+
+          echo "Profilname:              $PP_NAME"
+          echo "Profil-UUID:             $PP_UUID"
+          echo "Profil-Team:             $PP_TEAM"
+          echo "application-identifier:  $PP_APPID"
+
+          expected_appid="${TEAM_ID}.${BUNDLE_ID}"
+          if [ "$PP_TEAM" != "$TEAM_ID" ]; then
+            echo "::error::Team-ID des Profils ($PP_TEAM) weicht von erwartetem Wert ($TEAM_ID) ab."
+            exit 1
+          fi
+          if [ "$PP_APPID" != "$expected_appid" ]; then
+            echo "::error::application-identifier des Profils ($PP_APPID) weicht von erwartetem Wert ($expected_appid) ab."
+            exit 1
+          fi
+
+          PROFILES_DIR="$HOME/Library/MobileDevice/Provisioning Profiles"
+          mkdir -p "$PROFILES_DIR"
+          INSTALLED_PP="$PROFILES_DIR/$PP_UUID.mobileprovision"
+          cp "$PP_PATH" "$INSTALLED_PP"
+
+          echo "PP_PATH=$PP_PATH" >> "$GITHUB_ENV"
+          echo "PP_PLIST=$PP_PLIST" >> "$GITHUB_ENV"
+          echo "PP_NAME=$PP_NAME" >> "$GITHUB_ENV"
+          echo "INSTALLED_PP=$INSTALLED_PP" >> "$GITHUB_ENV"
+          echo "Provisioning Profile installiert und verifiziert."
+
+      # App-Store-Connect-API-Key (.p8) an den von altool erwarteten Ort legen.
+      - name: Install App Store Connect API key
+        env:
+          APP_STORE_CONNECT_API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
+          APP_STORE_CONNECT_API_KEY_BASE64: ${{ secrets.APP_STORE_CONNECT_API_KEY_BASE64 }}
+        run: |
+          set -euo pipefail
+          API_KEYS_DIR="$HOME/.appstoreconnect/private_keys"
+          mkdir -p "$API_KEYS_DIR"
+          API_KEY_PATH="$API_KEYS_DIR/AuthKey_${APP_STORE_CONNECT_API_KEY_ID}.p8"
+          printf '%s' "$APP_STORE_CONNECT_API_KEY_BASE64" | base64 --decode -o "$API_KEY_PATH"
+          chmod 600 "$API_KEY_PATH"
+          echo "API_KEYS_DIR=$API_KEYS_DIR" >> "$GITHUB_ENV"
+          echo "API_KEY_PATH=$API_KEY_PATH" >> "$GITHUB_ENV"
+          echo "API-Key hinterlegt (Dateiname enthält Key-ID)."
+
+      # ExportOptions.plist zur Laufzeit erzeugen – passend zum Profil.
+      - name: Generate ExportOptions.plist
+        run: |
+          set -euo pipefail
+          EXPORT_OPTIONS="$RUNNER_TEMP/ExportOptions.plist"
+          /usr/bin/env printf '<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0"><dict/></plist>\n' > "$EXPORT_OPTIONS"
+
+          /usr/libexec/PlistBuddy \
+            -c "Add :method string app-store-connect" \
+            -c "Add :destination string export" \
+            -c "Add :teamID string ${TEAM_ID}" \
+            -c "Add :signingStyle string manual" \
+            -c "Add :signingCertificate string Apple Distribution" \
+            -c "Add :stripSwiftSymbols bool true" \
+            -c "Add :uploadSymbols bool true" \
+            -c "Add :manageAppVersionAndBuildNumber bool false" \
+            -c "Add :provisioningProfiles dict" \
+            -c "Add :provisioningProfiles:${BUNDLE_ID} string ${PP_NAME}" \
+            "$EXPORT_OPTIONS"
+
+          echo "EXPORT_OPTIONS=$EXPORT_OPTIONS" >> "$GITHUB_ENV"
+          echo "----- ExportOptions.plist -----"
+          cat "$EXPORT_OPTIONS"
+
+      # Signiertes Archiv bauen und als IPA exportieren.
+      - name: Build signed IPA
+        run: |
+          set -euo pipefail
+          xcodebuild \
+            -project HelloBaby.xcodeproj \
+            -scheme HelloBaby \
+            -configuration Release \
+            -sdk iphoneos \
+            -archivePath "$RUNNER_TEMP/HelloBaby.xcarchive" \
+            CODE_SIGN_STYLE=Manual \
+            DEVELOPMENT_TEAM="${TEAM_ID}" \
+            CODE_SIGN_IDENTITY="Apple Distribution" \
+            PROVISIONING_PROFILE_SPECIFIER="${PP_NAME}" \
+            MARKETING_VERSION="${MARKETING_VERSION}" \
+            CURRENT_PROJECT_VERSION="${BUILD_NUMBER}" \
+            archive
+          xcodebuild \
+            -exportArchive \
+            -archivePath "$RUNNER_TEMP/HelloBaby.xcarchive" \
+            -exportOptionsPlist "${EXPORT_OPTIONS}" \
+            -exportPath build/ipa
+
+      # IPA verifizieren: Version/Build/Bundle-ID und Code-Signatur.
+      - name: Verify built IPA
+        run: |
+          set -euo pipefail
+
+          IPA_PATH="$(ls build/ipa/*.ipa 2>/dev/null | head -n1 || true)"
+          if [ -z "$IPA_PATH" ] || [ ! -f "$IPA_PATH" ]; then
+            echo "::error::Keine IPA unter build/ipa/ gefunden."
+            exit 1
+          fi
+          echo "IPA gefunden: $IPA_PATH"
+          ls -lh "$IPA_PATH"
+
+          WORKDIR="$RUNNER_TEMP/ipa_check"
+          rm -rf "$WORKDIR"
+          mkdir -p "$WORKDIR"
+          unzip -qq "$IPA_PATH" -d "$WORKDIR"
+
+          APP_DIR="$(ls -d "$WORKDIR"/Payload/*.app | head -n1)"
+          APP_PLIST="$APP_DIR/Info.plist"
+
+          got_bundle_id="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP_PLIST")"
+          got_version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP_PLIST")"
+          got_build="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP_PLIST")"
+
+          echo "Eingebettete Bundle-ID: $got_bundle_id"
+          echo "Eingebettete Version:   $got_version"
+          echo "Eingebettete Build:     $got_build"
+
+          fail=0
+          if [ "$got_bundle_id" != "$BUNDLE_ID" ]; then
+            echo "::error::Bundle-ID der IPA ($got_bundle_id) != $BUNDLE_ID"; fail=1
+          fi
+          if [ "$got_version" != "$MARKETING_VERSION" ]; then
+            echo "::error::Version der IPA ($got_version) != $MARKETING_VERSION"; fail=1
+          fi
+          if [ "$got_build" != "$BUILD_NUMBER" ]; then
+            echo "::error::Buildnummer der IPA ($got_build) != $BUILD_NUMBER"; fail=1
+          fi
+
+          echo "----- codesign -----"
+          codesign -dv --verbose=4 "$APP_DIR" 2>&1 | tee "$RUNNER_TEMP/codesign.txt"
+          if ! codesign --verify --deep --strict "$APP_DIR"; then
+            echo "::error::codesign-Verifikation fehlgeschlagen."; fail=1
+          fi
+          if ! grep -qi "Authority=Apple Distribution\|Authority=iPhone Distribution" "$RUNNER_TEMP/codesign.txt"; then
+            echo "::error::Signatur stammt nicht von einem Apple-Distribution-Zertifikat."; fail=1
+          fi
+
+          if [ "$fail" -ne 0 ]; then
+            exit 1
+          fi
+
+          echo "IPA_PATH=$IPA_PATH" >> "$GITHUB_ENV"
+          echo "IPA erfolgreich verifiziert."
+
+      # Validieren und nach App Store Connect hochladen (TestFlight).
+      - name: Validate and upload to App Store Connect
+        env:
+          APP_STORE_CONNECT_API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
+          APP_STORE_CONNECT_API_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_API_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+
+          echo "Validiere IPA gegen App Store Connect ..."
+          xcrun altool --validate-app \
+            -f "$IPA_PATH" \
+            --type ios \
+            --apiKey "$APP_STORE_CONNECT_API_KEY_ID" \
+            --apiIssuer "$APP_STORE_CONNECT_API_ISSUER_ID"
+
+          echo "Lade IPA nach App Store Connect / TestFlight hoch ..."
+          xcrun altool --upload-app \
+            -f "$IPA_PATH" \
+            --type ios \
+            --apiKey "$APP_STORE_CONNECT_API_KEY_ID" \
+            --apiIssuer "$APP_STORE_CONNECT_API_ISSUER_ID"
+
+          echo "Upload abgeschlossen. Verarbeitung in App Store Connect kann einige Minuten dauern."
+
+      # Aufräumen – immer, auch bei Fehlern.
+      - name: Cleanup
+        if: always()
+        run: |
+          set +e
+          if [ -n "${KEYCHAIN_PATH:-}" ] && [ -f "${KEYCHAIN_PATH:-}" ]; then
+            security delete-keychain "$KEYCHAIN_PATH"
+          fi
+          rm -f "${CERT_PATH:-}"
+          rm -f "${PP_PATH:-}" "${PP_PLIST:-}" "${INSTALLED_PP:-}"
+          rm -f "${EXPORT_OPTIONS:-}"
+          rm -f "${API_KEY_PATH:-}"
+          rm -rf "${API_KEYS_DIR:-}"
+          rm -rf "$RUNNER_TEMP/ipa_check" "$RUNNER_TEMP/codesign.txt" "$RUNNER_TEMP/HelloBaby.xcarchive"
+          echo "Cleanup abgeschlossen."

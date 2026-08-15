@@ -1,0 +1,46 @@
+name: iOS IPA (Release)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-ipa:
+    name: Unsignierte IPA bauen und als Release veröffentlichen
+    runs-on: macos-latest
+    # GITHUB_TOKEN braucht Schreibrechte, um Tag + Release anzulegen.
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      # Unsigniert bauen (Sideloading signiert beim Installieren selbst).
+      # CURRENT_PROJECT_VERSION = 100 + run_number haelt CFBundleVersion strikt
+      # steigend und sicher über den Buildnummern der früheren Flutter-App.
+      - name: App bauen (Release, iphoneos, ohne Signierung)
+        run: |
+          xcodebuild \
+            -project HelloBaby.xcodeproj \
+            -scheme HelloBaby \
+            -configuration Release \
+            -sdk iphoneos \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGN_IDENTITY="" \
+            CURRENT_PROJECT_VERSION=$((100 + ${{ github.run_number }})) \
+            build
+
+      - name: IPA packen
+        run: |
+          mkdir Payload
+          cp -R build/Build/Products/Release-iphoneos/HelloBaby.app Payload/
+          zip -qq -r -9 HelloBaby.ipa Payload
+
+      - name: IPA als GitHub-Release veröffentlichen
+        uses: svenstaro/upload-release-action@v2
+        with:
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          file: HelloBaby.ipa
+          asset_name: HelloBaby-v3.0.0-${{ github.run_number }}.ipa
+          tag: v3.0.0-${{ github.run_number }}
+          overwrite: true
+          body: "HelloBaby! v3.0.0 (Lauf ${{ github.run_number }}) – unsignierte IPA zum Sideloading"
