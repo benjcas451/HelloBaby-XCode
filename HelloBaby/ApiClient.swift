@@ -129,39 +129,61 @@ final class ApiClient: NSObject, @unchecked Sendable {
         images: images, diary: diary)
     }
 
+    // Den Multipart-Body in eine temporäre Datei streamen statt in den
+    // Speicher: Videos können hunderte MB groß sein.
     let boundary = "hellobaby-\(UUID().uuidString)"
-    var body = Data()
-    func feld(_ name: String, _ wert: String) {
-      body.append(Data("--\(boundary)\r\n".utf8))
-      body.append(
-        Data("Content-Disposition: form-data; name=\"\(name)\"\r\n\r\n\(wert)\r\n".utf8))
+    let bodyURL = FileManager.default.temporaryDirectory
+      .appendingPathComponent("upload_\(UUID().uuidString).tmp")
+    FileManager.default.createFile(atPath: bodyURL.path, contents: nil)
+    defer { try? FileManager.default.removeItem(at: bodyURL) }
+    let ausgabe = try FileHandle(forWritingTo: bodyURL)
+    func schreib(_ text: String) throws {
+      try ausgabe.write(contentsOf: Data(text.utf8))
     }
-    feld("diary", diary)
-    feld("kalender_datum", kalenderDatum)
-    feld("von_name", vonName)
-    for (key, value) in fields { feld(key, value) }
-    for url in images {
-      let daten = try Data(contentsOf: url)
-      body.append(Data("--\(boundary)\r\n".utf8))
-      body.append(
-        Data(
-          ("Content-Disposition: form-data; name=\"images[]\"; "
+    func feld(_ name: String, _ wert: String) throws {
+      try schreib("--\(boundary)\r\n")
+      try schreib("Content-Disposition: form-data; name=\"\(name)\"\r\n\r\n\(wert)\r\n")
+    }
+    do {
+      try feld("diary", diary)
+      try feld("kalender_datum", kalenderDatum)
+      try feld("von_name", vonName)
+      for (key, value) in fields { try feld(key, value) }
+      for url in images {
+        try schreib("--\(boundary)\r\n")
+        try schreib(
+          "Content-Disposition: form-data; name=\"images[]\"; "
             + "filename=\"\(url.lastPathComponent)\"\r\n"
-            + "Content-Type: application/octet-stream\r\n\r\n").utf8))
-      body.append(daten)
-      body.append(Data("\r\n".utf8))
+            + "Content-Type: application/octet-stream\r\n\r\n")
+        let quelle = try FileHandle(forReadingFrom: url)
+        while let stueck = try quelle.read(upToCount: 1 << 20), !stueck.isEmpty {
+          try ausgabe.write(contentsOf: stueck)
+        }
+        try quelle.close()
+        try schreib("\r\n")
+      }
+      try schreib("--\(boundary)--\r\n")
+      try ausgabe.close()
+    } catch {
+      try? ausgabe.close()
+      throw ServiceError(
+        message: "Medien konnten nicht vorbereitet werden: \(error.localizedDescription)")
     }
-    body.append(Data("--\(boundary)--\r\n".utf8))
 
     var request = URLRequest(url: try urlFuer(pfad: "entries.php", query: [:]))
     request.httpMethod = "POST"
     request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+    // Der Session-Timeout (30 s) ist ein Leerlauf-Timer für EMPFANGENE Daten —
+    // während eines langen Uploads kommt aber nichts an und die Anfrage bräche
+    // ab. Für Uploads deshalb großzügig erhöhen (deckt Upload + serverseitige
+    // Verarbeitung großer Videos ab).
+    request.timeoutInterval = 3600
     auth(&request)
 
     lock.withLock { progressHandler = onSendProgress }
     defer { lock.withLock { progressHandler = nil } }
 
-    let (data, response) = try await aktuelleSession().upload(for: request, from: body)
+    let (data, response) = try await aktuelleSession().upload(for: request, fromFile: bodyURL)
     let json = try Self.pruefen(data: data, response: response)
     guard let objekt = json as? [String: Any] else {
       throw ServiceError(message: "Unerwartete Antwort beim Erstellen.")
