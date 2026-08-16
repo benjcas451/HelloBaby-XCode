@@ -17,6 +17,9 @@ struct CreateView: View {
   @State private var nutzer: [String] = []
   @State private var medien: [GewaehltesMedium] = []
   @State private var fotoAuswahl: [PhotosPickerItem] = []
+  /// Anzahl Medien, die gerade aus der Mediathek übernommen werden – Videos
+  /// brauchen dafür mehrere Sekunden (Kopie/iCloud-Download).
+  @State private var medienLadenAnzahl = 0
   @State private var zeigeKamera = false
   @State private var speichert = false
   @StateObject private var upload = UploadFortschritt()
@@ -87,7 +90,7 @@ struct CreateView: View {
           Label("Kamera", systemImage: "camera")
         }
 
-        if !medien.isEmpty {
+        if !medien.isEmpty || medienLadenAnzahl > 0 {
           ScrollView(.horizontal) {
             HStack(spacing: 8) {
               ForEach(medien) { medium in
@@ -104,8 +107,25 @@ struct CreateView: View {
                   .padding(2)
                 }
               }
+              // Platzhalter für Medien, die noch übernommen werden.
+              ForEach(0..<medienLadenAnzahl, id: \.self) { _ in
+                VStack(spacing: 6) {
+                  ProgressView()
+                  Text("Übernehme…")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                }
+                .frame(width: 90, height: 90)
+                .background(Color.primary.opacity(0.06))
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+              }
             }
           }
+        }
+        if medienLadenAnzahl > 0 {
+          Text("Medien werden übernommen – bitte kurz warten.")
+            .font(.footnote)
+            .foregroundStyle(.secondary)
         }
       }
 
@@ -134,12 +154,16 @@ struct CreateView: View {
             } else {
               Image(systemName: "square.and.arrow.down")
             }
-            Text(speichert ? "Speichern…" : "Speichern")
-              .bold()
+            Text(
+              medienLadenAnzahl > 0
+                ? "Medien werden übernommen…"
+                : (speichert ? "Speichern…" : "Speichern")
+            )
+            .bold()
           }
           .frame(maxWidth: .infinity)
         }
-        .disabled(speichert)
+        .disabled(speichert || medienLadenAnzahl > 0)
       }
     }
     .navigationTitle("\(diary.title): Eintrag")
@@ -163,6 +187,7 @@ struct CreateView: View {
     .onChange(of: fotoAuswahl) { _, neu in
       guard !neu.isEmpty else { return }
       fotoAuswahl = []
+      medienLadenAnzahl += neu.count
       Task { await uebernehmeAuswahl(neu) }
     }
     .fullScreenCover(isPresented: $zeigeKamera) {
@@ -214,6 +239,7 @@ struct CreateView: View {
 
   private func uebernehmeAuswahl(_ auswahl: [PhotosPickerItem]) async {
     for element in auswahl {
+      defer { medienLadenAnzahl = max(0, medienLadenAnzahl - 1) }
       do {
         let istVideo = element.supportedContentTypes.contains { $0.conforms(to: .movie) }
         if istVideo {
@@ -235,6 +261,10 @@ struct CreateView: View {
   }
 
   private func speichern() {
+    guard medienLadenAnzahl == 0 else {
+      meldung = "Bitte warten – Medien werden noch übernommen."
+      return
+    }
     let pflichtFehlt = diary.fields.contains {
       $0.required && (werte[$0.key] ?? "").trimmingCharacters(in: .whitespaces).isEmpty
     }
