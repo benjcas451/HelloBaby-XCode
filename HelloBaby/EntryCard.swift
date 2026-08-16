@@ -166,38 +166,45 @@ struct MediaThumb: View {
   var quelle: String { lokal ? folder + "/" + file : folder + "/" + file }
 
   var body: some View {
-    ZStack {
-      if lokal {
-        if let lokalesBild {
-          Image(uiImage: lokalesBild)
-            .resizable()
-            .scaledToFill()
+    // Color.clear nimmt exakt den zugewiesenen Rahmen an; das Bild wird als
+    // Overlay hineingelegt und zuverlässig auf diesen Rahmen beschnitten –
+    // sonst überlaufen scaledToFill-Bilder ihre Grid-Zelle.
+    Color.clear
+      .overlay {
+        if lokal {
+          if let lokalesBild {
+            Image(uiImage: lokalesBild)
+              .resizable()
+              .scaledToFill()
+          } else {
+            Rectangle().fill(Color.black.opacity(istVideo ? 0.85 : 0.08))
+          }
         } else {
-          Rectangle().fill(Color.black.opacity(istVideo ? 0.85 : 0.08))
-        }
-      } else {
-        AsyncImage(url: URL(string: ApiClient.shared.thumbUrl(quelle))) { phase in
-          switch phase {
-          case .success(let bild):
-            bild.resizable().scaledToFill()
-          case .failure:
-            Rectangle().fill(Color.black.opacity(0.1))
-              .overlay(Image(systemName: "photo").foregroundStyle(.secondary))
-          default:
-            Rectangle().fill(Color.black.opacity(0.05))
-              .overlay(ProgressView())
+          AsyncImage(url: URL(string: ApiClient.shared.thumbUrl(quelle))) { phase in
+            switch phase {
+            case .success(let bild):
+              bild.resizable().scaledToFill()
+            case .failure:
+              Rectangle().fill(Color.black.opacity(0.1))
+                .overlay(Image(systemName: "photo").foregroundStyle(.secondary))
+            default:
+              Rectangle().fill(Color.black.opacity(0.05))
+                .overlay(ProgressView())
+            }
           }
         }
       }
-      if istVideo {
-        Image(systemName: "play.circle.fill")
-          .font(.title)
-          .foregroundStyle(.white)
-          .shadow(radius: 4)
+      .overlay {
+        if istVideo {
+          Image(systemName: "play.circle.fill")
+            .font(.title)
+            .foregroundStyle(.white)
+            .shadow(radius: 4)
+        }
       }
-    }
-    .clipped()
-    .task(id: quelle) {
+      .clipped()
+      .contentShape(Rectangle())
+      .task(id: quelle) {
       guard lokal, lokalesBild == nil else { return }
       let pfad = quelle
       if istVideo {
@@ -205,7 +212,7 @@ struct MediaThumb: View {
       } else {
         lokalesBild = await Task.detached { UIImage(contentsOfFile: pfad) }.value
       }
-    }
+      }
   }
 
   private static func videoStandbild(pfad: String) async -> UIImage? {

@@ -85,7 +85,7 @@ struct ImageFeedView: View {
     let thumb = MediaThumb(folder: kachel.entry.bilder, file: kachel.datei)
     if isVideoFile(kachel.datei) {
       NavigationLink(value: Ziel.video(url: thumb.quelle)) {
-        thumb.aspectRatio(1, contentMode: .fill)
+        thumb.aspectRatio(1, contentMode: .fit)
       }
       .buttonStyle(.plain)
     } else {
@@ -96,7 +96,7 @@ struct ImageFeedView: View {
           dateien: bilder,
           start: bilder.firstIndex(of: kachel.datei) ?? 0)
       } label: {
-        thumb.aspectRatio(1, contentMode: .fill)
+        thumb.aspectRatio(1, contentMode: .fit)
       }
       .buttonStyle(.plain)
     }
