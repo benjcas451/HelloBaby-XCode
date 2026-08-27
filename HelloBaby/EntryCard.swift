@@ -1,4 +1,5 @@
 import AVFoundation
+import ImageIO
 import SwiftUI
 
 /// Karte eines Tagebuch-Eintrags: Kopfzeile (erstellt am / von), dynamische
@@ -163,7 +164,7 @@ struct MediaThumb: View {
   private var lokal: Bool { isLocalMediaSource(folder) }
 
   /// Quelle als String für die Navigation (Pfad oder relative Server-Datei).
-  var quelle: String { lokal ? folder + "/" + file : folder + "/" + file }
+  var quelle: String { folder + "/" + file }
 
   var body: some View {
     // Color.clear nimmt exakt den zugewiesenen Rahmen an; das Bild wird als
@@ -210,15 +211,40 @@ struct MediaThumb: View {
       if istVideo {
         lokalesBild = await Self.videoStandbild(pfad: pfad)
       } else {
-        lokalesBild = await Task.detached { UIImage(contentsOfFile: pfad) }.value
+        lokalesBild = await Task.detached { Self.vorschaubild(pfad: pfad) }.value
       }
       }
+  }
+
+  /// Kantenlänge der Vorschau in Pixeln. Die Kachel ist im 3-spaltigen Grid
+  /// keine 150 pt breit; 600 px decken auch @3x mit Reserve ab.
+  static let vorschauKante = 600
+
+  /// Rechnet das Bild schon beim Dekodieren herunter.
+  ///
+  /// `UIImage(contentsOfFile:)` dekodiert die volle Kameraauflösung – ein
+  /// 12-MP-Foto belegt so rund 48 MB, und im Grid sind schnell mehrere Dutzend
+  /// gleichzeitig im Speicher. Genau das ist der klassische Weg, wie iOS eine
+  /// Galerie wegen Speichermangels beendet. Videos waren über
+  /// `AVAssetImageGenerator.maximumSize` längst gedeckelt, Standbilder nicht.
+  static func vorschaubild(pfad: String) -> UIImage? {
+    let quelle = CGImageSourceCreateWithURL(URL(fileURLWithPath: pfad) as CFURL, nil)
+    guard let quelle else { return nil }
+    let optionen: [CFString: Any] = [
+      kCGImageSourceCreateThumbnailFromImageAlways: true,
+      kCGImageSourceCreateThumbnailWithTransform: true,
+      kCGImageSourceThumbnailMaxPixelSize: vorschauKante,
+    ]
+    guard
+      let bild = CGImageSourceCreateThumbnailAtIndex(quelle, 0, optionen as CFDictionary)
+    else { return nil }
+    return UIImage(cgImage: bild)
   }
 
   private static func videoStandbild(pfad: String) async -> UIImage? {
     let generator = AVAssetImageGenerator(asset: AVURLAsset(url: URL(fileURLWithPath: pfad)))
     generator.appliesPreferredTrackTransform = true
-    generator.maximumSize = CGSize(width: 600, height: 600)
+    generator.maximumSize = CGSize(width: CGFloat(vorschauKante), height: CGFloat(vorschauKante))
     guard let bild = try? await generator.image(at: .zero).image else { return nil }
     return UIImage(cgImage: bild)
   }

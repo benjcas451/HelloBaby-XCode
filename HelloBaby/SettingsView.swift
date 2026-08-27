@@ -129,7 +129,14 @@ struct SettingsView: View {
     .sheet(
       isPresented: .init(
         get: { backupURL != nil },
-        set: { if !$0 { backupURL = nil } })
+        set: {
+          if !$0 {
+            // Das ZIP hat das Teilen-Blatt hinter sich; es liegt sonst bis
+            // zum nächsten Systemputz in tmp/ herum.
+            if let backupURL { try? FileManager.default.removeItem(at: backupURL) }
+            backupURL = nil
+          }
+        })
     ) {
       if let backupURL {
         TeilenBlatt(url: backupURL)
