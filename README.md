@@ -39,6 +39,82 @@ Beim ersten Start werden vorhandene Flutter-Daten übernommen:
   auf iOS als natives Array. Auch das gespeicherte Zertifikats-Bookmark
   (`cert_folder_bookmark_ios`/`cert_folder_label_ios`) wird übernommen.
 
+## REST-API & Datenmodell
+
+Basis-URL konfiguriert der Nutzer in den Einstellungen; die Endpunkte liegen
+darunter im Pfad `/api`. Alle Antworten JSON, Fehler als `{"error": "…"}` mit
+passendem HTTP-Status.
+
+| Endpunkt | Zweck |
+|---|---|
+| `GET /api/stats.php?diary=<id>` | erster/letzter Eintrag, zufälliges Datum |
+| `GET /api/entries.php?date=YYYY-MM-DD&diary=<id>` | Einträge eines Tages (ebenso `?year=&month=`, `?favorites=1`, `?images=1`) |
+| `POST /api/entries.php` | Eintrag anlegen (`multipart/form-data`): Felder je Tagebuch + `kalender_datum`, `von_name`, `diary`, optional `images[]` |
+| `DELETE /api/entries.php?id=<id>&diary=<id>` | Eintrag löschen |
+| `POST /api/favorite.php` | Favorit umschalten, Body `{"id":…, "diary":"…"}` |
+| `GET /api/gallery.php?folder=uploads/<ordner>` | Dateien einer Galerie |
+
+Vorschaubilder und Video-Poster liefert `/api/thumb.php`, die Medien selbst
+`/api/media.php?file=…` (`&download=1` erzwingt den Download); beide sind ohne
+Auth erreichbar. Die geschützten Endpunkte authentifizieren je nach Modus über
+den Header `X-API-Key` oder das Client-Zertifikat.
+
+**Datenmodell.** Die lokale Tabelle `entries` spiegelt exakt das Modell der
+API (Spaltenordnung wie in der Flutter-App):
+
+| Spalte | Typ | Bedeutung |
+|---|---|---|
+| `id` | INTEGER | Primärschlüssel (Auto-Increment) |
+| `diary` | TEXT | `schwangerschaft` oder `entwicklung` |
+| `kalender_datum` | TEXT | Tag des Eintrags, `YYYY-MM-DD` |
+| `bilder` | TEXT | Medienordner des Eintrags (`media/<diary>_<id>`), leer wenn keine |
+| `von_name` | TEXT | ausgewählter Ersteller |
+| `favorit` | INTEGER | 0/1 |
+| `created_at` | TEXT | Zeitpunkt der Erfassung, ISO 8601 |
+| `fields_json` | TEXT | die tagebuchspezifischen Felder als JSON-Objekt |
+
+`bilder` führt einen absoluten Pfad (Erbe der Flutter-App). Der Container
+bekommt bei jeder Neuinstallation eine neue UUID, deshalb biegt
+`LocalStore.heileMedienPfad` den Pfad beim Lesen anhand des Ordnernamens auf
+den aktuellen Container um.
+
+Schema-Version 2 (`PRAGMA user_version`) ergänzt die Tabelle `remote_imports`
+(`local_id`, `diary`, `server_base`, `remote_id`, `imported_at`): sie merkt
+sich je Server, welcher lokale Eintrag schon übertragen wurde, damit ein
+erneuter Import keine Duplikate anlegt.
+
+## Sicherung & Gerätewechsel
+
+Auf iOS gibt es kein Gegenstück zu Androids `backup_rules.xml` /
+`data_extraction_rules.xml`. Gesteuert wird über die Dateiablage
+(`Documents` wird gesichert, `Library/Caches` und `tmp` nicht),
+`isExcludedFromBackup` und die Keychain-Attribute.
+
+| | iCloud-Backup | Direkttransfer (Schnellstart) |
+|---|---|---|
+| Einträge (SQLite) | ✅ | ✅ |
+| Medien (Fotos/Videos) | ✅ | ✅ |
+| API-Key (Keychain) | ❌ | ✅ |
+| Client-Zertifikat | ❌ | ❌ |
+
+Der API-Key liegt in der Keychain, mit `kSecAttrAccessibleAfterFirstUnlock`
+und **ohne** `kSecAttrSynchronizable`. Damit ist er beim Direkttransfer und
+im verschlüsselten Finder-Backup dabei, aus einem iCloud-Backup dagegen nicht
+wiederherstellbar — die iOS-Entsprechung der Android-Entscheidung
+„`<device-transfer>` ja, `<cloud-backup>` nein“. Nach einer Wiederherstellung
+aus iCloud ist er einmal neu einzutragen.
+
+Client-Zertifikate (`client.crt` / `client.key`) liegen im App-Ordner der
+Dateien-App und sind nach einem Gerätewechsel gegebenenfalls neu abzulegen.
+
+Ein selbst gewählter Zertifikats-Ordner wird als security-scoped Bookmark
+gespeichert. Die Leseberechtigung überlebt einen Gerätewechsel nicht;
+`CertSource` erkennt das über `bookmarkDataIsStale` und bittet darum, den
+Ordner erneut auszuwählen.
+
+Unabhängig davon gibt es im Modus „Lokal“ das vollständige ZIP-Backup
+inklusive Medien unter *Einstellungen → Backup*.
+
 ## Build
 
 ```bash

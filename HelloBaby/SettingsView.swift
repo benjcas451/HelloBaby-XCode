@@ -27,6 +27,69 @@ private let apiInfoText = """
   Fehler kommen als {"error": "…"} mit passendem HTTP-Statuscode.
   """
 
+/// Beschreibung des lokalen Datenmodells (für den Dialog „Aufbau Datenbank“).
+private let dbInfoText = """
+  Die App führt eine eigene SQLite-Datenbank unter \
+  Documents/HelloBaby/hello_baby.sqlite; die Medien liegen daneben in \
+  Documents/HelloBaby/media/. Im Modus „Lokal“ ist das die einzige Datenquelle, \
+  in den Server-Modi speist sie den einmaligen Import zur API.
+
+  Tabelle "entries":
+
+  • id
+    INTEGER, Primärschlüssel (Auto-Increment)
+
+  • diary
+    TEXT, Tagebuch: schwangerschaft oder entwicklung
+
+  • kalender_datum
+    TEXT, Tag des Eintrags als YYYY-MM-DD
+
+  • bilder
+    TEXT, Ordner der Medien dieses Eintrags (media/<diary>_<id>), leer wenn keine. \
+  Gespeichert wird ein absoluter Pfad – der Container bekommt bei jeder \
+  Neuinstallation eine neue UUID, deshalb biegt die App den Pfad beim Lesen \
+  anhand des Ordnernamens auf den aktuellen Container um.
+
+  • von_name
+    TEXT, ausgewählter Ersteller
+
+  • favorit
+    INTEGER (0/1)
+
+  • created_at
+    TEXT, Zeitpunkt der Erfassung als ISO 8601
+
+  • fields_json
+    TEXT, die tagebuchspezifischen Felder als JSON-Objekt
+
+  Tabelle "remote_imports" (Schema-Version 2) merkt sich je Server, welcher \
+  lokale Eintrag schon zur API übertragen wurde (local_id, diary, server_base, \
+  remote_id, imported_at) – deshalb legt ein erneuter Import keine Duplikate an.
+
+  Die Server-API verwendet dasselbe Datenmodell; die Medien liegen dort unter \
+  uploads/<ordner> statt im lokalen Medienordner.
+
+  Sicherung & Gerätewechsel
+
+  Datenbank und Medienordner liegen in Documents und werden vom iCloud-Backup \
+  mitgesichert. Das ist Absicht: Fotos und Videos existieren nur hier, ein \
+  Ausschluss würde sie beim Gerätewechsel verlieren.
+
+  Der API-Key liegt dagegen nicht in den Einstellungen, sondern in der Keychain. \
+  Er wandert beim Direkttransfer auf ein neues Gerät (Schnellstart) und im \
+  verschlüsselten Backup über den Computer mit, lässt sich aus einem \
+  iCloud-Backup aber nicht wiederherstellen. Nach einer Wiederherstellung aus \
+  iCloud ist er einmal neu einzutragen.
+
+  Ein selbst gewählter Zertifikats-Ordner wird als Lesezeichen gespeichert. Die \
+  Leseberechtigung überlebt einen Gerätewechsel nicht – die App meldet das und \
+  bittet darum, den Ordner erneut auszuwählen.
+
+  Unabhängig davon lässt sich im Modus „Lokal“ jederzeit ein vollständiges \
+  ZIP-Backup inklusive Medien sichern und wieder einspielen.
+  """
+
 struct SettingsView: View {
 
   @State private var mode = AppSettings.mode
@@ -41,6 +104,7 @@ struct SettingsView: View {
   @State private var personDialog = false
   @State private var neuerName = ""
   @State private var infoDialog = false
+  @State private var dbDialog = false
   @State private var meldung: String?
 
   @State private var exportiert = false
@@ -67,12 +131,19 @@ struct SettingsView: View {
       } else {
         serverSektion
         importSektion
-        Section {
+      }
+      Section {
+        if mode != .local {
           Button {
             infoDialog = true
           } label: {
             Label("Aufbau API", systemImage: "cloud")
           }
+        }
+        Button {
+          dbDialog = true
+        } label: {
+          Label("Aufbau Datenbank", systemImage: "cylinder.split.1x2")
         }
       }
     }
@@ -122,6 +193,22 @@ struct SettingsView: View {
         .toolbar {
           ToolbarItem(placement: .topBarTrailing) {
             Button("Schließen") { infoDialog = false }
+          }
+        }
+      }
+    }
+    .sheet(isPresented: $dbDialog) {
+      NavigationStack {
+        ScrollView {
+          Text(dbInfoText)
+            .font(.callout)
+            .padding()
+        }
+        .navigationTitle("Aufbau Datenbank")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+          ToolbarItem(placement: .topBarTrailing) {
+            Button("Schließen") { dbDialog = false }
           }
         }
       }

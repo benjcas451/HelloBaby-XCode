@@ -161,8 +161,7 @@ enum AppSettings {
 /// Direkttransfer auf ein neues Gerät (Quick Start) und im verschlüsselten
 /// Finder-Backup dabei, aus einem iCloud-Backup dagegen nicht
 /// wiederherstellbar. Das ist die iOS-Entsprechung der Android-Trennung
-/// „`<device-transfer>` ja, `<cloud-backup>` nein“; die Uhr legt ihre
-/// übernommene Verbindung in `ServerConnectionStore` mit demselben Attribut ab.
+/// „`<device-transfer>` ja, `<cloud-backup>` nein“.
 private enum ApiKeyStore {
 
   private static let service = "ch.tschir.HelloBaby"
