@@ -1,0 +1,31 @@
+name: Build
+
+# Automatischer Build-Check. build-ipa.yml taugt dafür nicht: die läuft nur
+# manuell und veröffentlicht am Ende ein GitHub-Release. Hier zählt allein,
+# ob der Code übersetzt – deshalb ohne IPA-Verpackung und ohne Release.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build:
+    name: Release-Build (iphoneos, unsigniert)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Gleicher Aufruf wie in build-ipa.yml, nur ohne die Release-Schritte.
+      # Ein shared scheme liegt bewusst nicht im Repo – Xcode legt es zur
+      # Laufzeit selbst an; in diesem Repo-Verbund ist der Aufruf so bereits
+      # erfolgreich gelaufen.
+      - name: App bauen
+        run: |
+          xcodebuild \
+            -project HelloBaby.xcodeproj \
+            -scheme HelloBaby \
+            -configuration Release \
+            -sdk iphoneos \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGN_IDENTITY="" \
+            build
