@@ -19,6 +19,25 @@ struct HelloBabyApp: App {
 
   init() {
     AppSettings.migrationAusfuehren()
+    Self.tmpAufraeumen()
+  }
+
+  /// Entfernt Zwischenkopien früherer Sitzungen aus `tmp/`.
+  ///
+  /// Medien aus Mediathek und Kamera werden vor dem Speichern dorthin kopiert,
+  /// das Backup-ZIP ebenso. Bricht die App vorher ab, blieben sie liegen –
+  /// im lokalen Modus lag damit jedes Foto und jedes Video doppelt auf dem
+  /// Gerät. Der laufende Betrieb räumt seine eigenen Dateien selbst weg;
+  /// hier geht es um die Altlasten.
+  private static func tmpAufraeumen() {
+    let praefixe = [
+      "auswahl_", "film_", "kamera_", "hello_baby_backup_", "restore_staging_",
+    ]
+    let tmp = FileManager.default.temporaryDirectory
+    let inhalt = (try? FileManager.default.contentsOfDirectory(atPath: tmp.path)) ?? []
+    for name in inhalt where praefixe.contains(where: name.hasPrefix) {
+      try? FileManager.default.removeItem(at: tmp.appendingPathComponent(name))
+    }
   }
 
   var body: some Scene {

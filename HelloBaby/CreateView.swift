@@ -100,6 +100,7 @@ struct CreateView: View {
                     .clipShape(RoundedRectangle(cornerRadius: 8))
                   Button {
                     medien.removeAll { $0.id == medium.id }
+                    Self.loesche([medium])
                   } label: {
                     Image(systemName: "xmark.circle.fill")
                       .foregroundStyle(.white, .red)
@@ -230,10 +231,24 @@ struct CreateView: View {
           .font(.title)
           .foregroundStyle(.white)
       }
-    } else if let bild = UIImage(contentsOfFile: medium.url.path) {
+    } else if let bild = MediaThumb.vorschaubild(pfad: medium.url.path) {
+      // 90x90-Kachel – die volle Kameraauflösung dafür zu dekodieren, wäre
+      // derselbe Speicherfehler wie früher im Galerie-Grid.
       Image(uiImage: bild).resizable().scaledToFill()
     } else {
       Rectangle().fill(Color.black.opacity(0.1))
+    }
+  }
+
+  /// Räumt die Zwischenkopien in `tmp/` weg.
+  ///
+  /// Bewusst nicht in `onDisappear`: SwiftUI ruft das auch, wenn die Ansicht
+  /// nur überdeckt wird – etwa beim Sprung in die Einstellungen von hier aus.
+  /// Die Dateien eines verworfenen Formulars räumt der Sweep beim nächsten
+  /// App-Start ab (`HelloBabyApp.tmpAufraeumen()`).
+  private static func loesche(_ medien: [GewaehltesMedium]) {
+    for medium in medien {
+      try? FileManager.default.removeItem(at: medium.url)
     }
   }
 
@@ -294,6 +309,11 @@ struct CreateView: View {
           diary: diary.id,
           onSendProgress: progress)
         AppSettings.selectedUser = vonName
+        // Die Zwischenkopien haben ihren Zweck erfüllt: hochgeladen bzw. im
+        // lokalen Modus nach Documents/HelloBaby/media/ kopiert. Ohne dieses
+        // Aufräumen liegt jedes Foto und jedes Video dauerhaft doppelt da.
+        Self.loesche(medien)
+        medien = []
         speichert = false
         dismiss()
       } catch {

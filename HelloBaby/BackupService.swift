@@ -41,25 +41,32 @@ struct BackupService {
     let manifestJson = try JSONSerialization.data(
       withJSONObject: ["format": 1, "entries": manifest])
 
-    var zip = ZipWriter()
-    zip.add(name: "entries.json", data: manifestJson)
+    let ziel = FileManager.default.temporaryDirectory.appendingPathComponent(dateiname())
+    try? FileManager.default.removeItem(at: ziel)
+    var zip = try ZipWriter(ziel: ziel)
+    do {
+      try zip.add(name: "entries.json", data: manifestJson)
 
-    let fm = FileManager.default
-    if let ordnerListe = try? fm.contentsOfDirectory(atPath: media.path) {
-      for ordner in ordnerListe.sorted() where !ordner.hasPrefix(".") {
-        let ordnerURL = media.appendingPathComponent(ordner)
-        guard (try? ordnerURL.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true
-        else { continue }
-        for datei in ((try? fm.contentsOfDirectory(atPath: ordnerURL.path)) ?? []).sorted()
-        where !datei.hasPrefix(".") {
-          let daten = try Data(contentsOf: ordnerURL.appendingPathComponent(datei))
-          zip.add(name: "media/\(ordner)/\(datei)", data: daten)
+      let fm = FileManager.default
+      if let ordnerListe = try? fm.contentsOfDirectory(atPath: media.path) {
+        for ordner in ordnerListe.sorted() where !ordner.hasPrefix(".") {
+          let ordnerURL = media.appendingPathComponent(ordner)
+          guard (try? ordnerURL.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true
+          else { continue }
+          for datei in ((try? fm.contentsOfDirectory(atPath: ordnerURL.path)) ?? []).sorted()
+          where !datei.hasPrefix(".") {
+            try zip.add(
+              name: "media/\(ordner)/\(datei)", datei: ordnerURL.appendingPathComponent(datei))
+          }
         }
       }
+      try zip.finish()
+    } catch {
+      // Kein halbes Archiv in tmp/ zurücklassen.
+      try? zip.abbrechen()
+      try? FileManager.default.removeItem(at: ziel)
+      throw error
     }
-
-    let ziel = FileManager.default.temporaryDirectory.appendingPathComponent(dateiname())
-    try zip.finish().write(to: ziel)
     return ziel
   }
 
@@ -69,10 +76,17 @@ struct BackupService {
   func restore(from url: URL) async throws -> Int {
     let hatZugriff = url.startAccessingSecurityScopedResource()
     defer { if hatZugriff { url.stopAccessingSecurityScopedResource() } }
-    let daten = try Data(contentsOf: url)
+    // .mappedIfSafe: der Kernel blendet das Archiv seitenweise ein, statt es
+    // komplett in den Speicher zu kopieren. Bei Backups mit Videos ist das
+    // der Unterschied zwischen ein paar MB und der vollen Archivgröße.
+    let daten = try Data(contentsOf: url, options: .mappedIfSafe)
     let eintraege = try ZipReader.entries(in: daten)
 
-    let staging = LocalStore.rootDirectory
+    // Staging in tmp/, nicht in Documents: ein durch App-Kill unterbrochener
+    // Restore hinterlässt sonst eine Vollkopie aller Medien im gesicherten
+    // Bereich. tmp/ liegt im selben Data-Container, der abschließende
+    // moveItem in LocalStore.restoreRows funktioniert also weiterhin.
+    let staging = FileManager.default.temporaryDirectory
       .appendingPathComponent("restore_staging_\(UUID().uuidString)")
     let stagedMedia = staging.appendingPathComponent("media")
     try FileManager.default.createDirectory(at: stagedMedia, withIntermediateDirectories: true)
@@ -82,7 +96,7 @@ struct BackupService {
     for eintrag in eintraege {
       let name = eintrag.name.replacingOccurrences(of: "\\", with: "/")
       if name == "entries.json" {
-        manifestDaten = try ZipReader.extract(eintrag, from: daten)
+        manifestDaten = Data(try ZipReader.extract(eintrag, from: daten))
         continue
       }
       guard name.hasPrefix("media/"), !name.hasSuffix("/") else { continue }
@@ -180,34 +194,71 @@ struct BackupService {
 
 /// Schreibt ein ZIP ohne Kompression (STORE) – ausreichend, weil Fotos und
 /// Videos ohnehin schon komprimiert sind.
+///
+/// Geschrieben wird direkt in die Zieldatei: nur das Central Directory (ein
+/// Eintrag je Datei, keine Nutzdaten) wird bis zum Schluss im Speicher
+/// gehalten. Ein Medienarchiv über mehrere hundert MB lag sonst komplett im
+/// Arbeitsspeicher – beim Abschluss sogar doppelt.
 private struct ZipWriter {
 
-  private var daten = Data()
+  private let griff: FileHandle
   private var verzeichnis = Data()
   private var anzahl: UInt16 = 0
+  private var offset: UInt32 = 0
 
-  mutating func add(name: String, data inhalt: Data) {
+  init(ziel: URL) throws {
+    guard
+      FileManager.default.createFile(atPath: ziel.path, contents: nil),
+      let griff = try? FileHandle(forWritingTo: ziel)
+    else {
+      throw ServiceError(message: "Die Backup-Datei ließ sich nicht anlegen.")
+    }
+    self.griff = griff
+  }
+
+  mutating func add(name: String, data inhalt: Data) throws {
+    try schreibe(name: name, inhalt: inhalt)
+  }
+
+  /// Nimmt eine Mediendatei auf, ohne sie ganz in den Speicher zu holen:
+  /// `.mappedIfSafe` blendet sie nur ein, die Seiten kann das System jederzeit
+  /// wieder verwerfen.
+  mutating func add(name: String, datei: URL) throws {
+    try schreibe(name: name, inhalt: try Data(contentsOf: datei, options: .mappedIfSafe))
+  }
+
+  private mutating func schreibe(name: String, inhalt: Data) throws {
     let nameDaten = Data(name.utf8)
-    let offset = UInt32(daten.count)
     let crc = inhalt.withUnsafeBytes { puffer -> UInt32 in
       UInt32(crc32(0, puffer.bindMemory(to: UInt8.self).baseAddress, uInt(inhalt.count)))
+    }
+    let start = offset
+    // ZIP32 adressiert mit 32 Bit. Vorher prüfen statt beim Umrechnen zu
+    // trappen – ein Medienordner jenseits von 4 GB ist nicht abwegig.
+    let ende = UInt64(start) + 30 + UInt64(nameDaten.count) + UInt64(inhalt.count)
+    guard ende <= UInt64(UInt32.max) else {
+      throw ServiceError(
+        message: "Das Backup wäre größer als 4 GB – so viel fasst das ZIP-Format nicht.")
     }
     let groesse = UInt32(inhalt.count)
 
     // Local File Header
-    daten.append(le32(0x0403_4B50))
-    daten.append(le16(20))              // benötigte Version
-    daten.append(le16(0))               // Flags
-    daten.append(le16(0))               // Methode: STORE
-    daten.append(le16(0))               // Zeit
-    daten.append(le16(0x21))            // Datum (1.1.1980)
-    daten.append(le32(crc))
-    daten.append(le32(groesse))         // komprimiert
-    daten.append(le32(groesse))         // unkomprimiert
-    daten.append(le16(UInt16(nameDaten.count)))
-    daten.append(le16(0))               // Extra
-    daten.append(nameDaten)
-    daten.append(inhalt)
+    var kopf = Data()
+    kopf.append(le32(0x0403_4B50))
+    kopf.append(le16(20))              // benötigte Version
+    kopf.append(le16(0))               // Flags
+    kopf.append(le16(0))               // Methode: STORE
+    kopf.append(le16(0))               // Zeit
+    kopf.append(le16(0x21))            // Datum (1.1.1980)
+    kopf.append(le32(crc))
+    kopf.append(le32(groesse))         // komprimiert
+    kopf.append(le32(groesse))         // unkomprimiert
+    kopf.append(le16(UInt16(nameDaten.count)))
+    kopf.append(le16(0))               // Extra
+    kopf.append(nameDaten)
+    try griff.write(contentsOf: kopf)
+    try griff.write(contentsOf: inhalt)
+    offset = UInt32(ende)
 
     // Central-Directory-Eintrag
     verzeichnis.append(le32(0x0201_4B50))
@@ -226,24 +277,28 @@ private struct ZipWriter {
     verzeichnis.append(le16(0))         // Disk
     verzeichnis.append(le16(0))         // interne Attribute
     verzeichnis.append(le32(0))         // externe Attribute
-    verzeichnis.append(le32(offset))
+    verzeichnis.append(le32(start))
     verzeichnis.append(nameDaten)
     anzahl += 1
   }
 
-  func finish() -> Data {
-    var ergebnis = daten
-    ergebnis.append(verzeichnis)
+  func finish() throws {
+    var ende = verzeichnis
     // End of Central Directory
-    ergebnis.append(le32(0x0605_4B50))
-    ergebnis.append(le16(0))
-    ergebnis.append(le16(0))
-    ergebnis.append(le16(anzahl))
-    ergebnis.append(le16(anzahl))
-    ergebnis.append(le32(UInt32(verzeichnis.count)))
-    ergebnis.append(le32(UInt32(daten.count)))
-    ergebnis.append(le16(0))
-    return ergebnis
+    ende.append(le32(0x0605_4B50))
+    ende.append(le16(0))
+    ende.append(le16(0))
+    ende.append(le16(anzahl))
+    ende.append(le16(anzahl))
+    ende.append(le32(UInt32(verzeichnis.count)))
+    ende.append(le32(offset))
+    ende.append(le16(0))
+    try griff.write(contentsOf: ende)
+    try griff.close()
+  }
+
+  func abbrechen() throws {
+    try griff.close()
   }
 
   private func le16(_ wert: UInt16) -> Data { withUnsafeBytes(of: wert.littleEndian) { Data($0) } }
@@ -252,6 +307,12 @@ private struct ZipWriter {
 
 /// Liest ZIP-Einträge über das Central Directory; unterstützt STORE und
 /// DEFLATE (rohes Deflate über das Compression-Framework).
+///
+/// Gelesen wird direkt aus der übergebenen `Data` – bei einem per
+/// `.mappedIfSafe` eingeblendeten Archiv also seitenweise aus der Datei. Für
+/// STORE liefert `extract` eine Slice ohne Kopie; nur DEFLATE-Einträge müssen
+/// entpackt werden. Alle Offsets stammen aus der Datei und werden deshalb
+/// konsequent gegen die Puffergröße geprüft.
 private enum ZipReader {
 
   struct Eintrag {
@@ -263,15 +324,12 @@ private enum ZipReader {
   }
 
   static func entries(in daten: Data) throws -> [Eintrag] {
-    let bytes = [UInt8](daten)
     // EOCD am Dateiende suchen (Signatur 0x06054b50, max. 64 KB Kommentar).
     var eocd = -1
-    var index = bytes.count - 22
-    let grenze = max(0, bytes.count - 22 - 65536)
+    var index = daten.count - 22
+    let grenze = max(0, daten.count - 22 - 65536)
     while index >= grenze {
-      if bytes[index] == 0x50, bytes[index + 1] == 0x4B,
-        bytes[index + 2] == 0x05, bytes[index + 3] == 0x06
-      {
+      if try u32(daten, index) == 0x0605_4B50 {
         eocd = index
         break
       }
@@ -280,23 +338,22 @@ private enum ZipReader {
     guard eocd >= 0 else {
       throw ServiceError(message: "Die Datei ist kein ZIP-Archiv.")
     }
-    let anzahl = Int(u16(bytes, eocd + 10))
-    var position = Int(u32(bytes, eocd + 16))
+    let anzahl = Int(try u16(daten, eocd + 10))
+    var position = Int(try u32(daten, eocd + 16))
 
     var eintraege: [Eintrag] = []
     for _ in 0..<anzahl {
-      guard u32(bytes, position) == 0x0201_4B50 else {
+      guard try u32(daten, position) == 0x0201_4B50 else {
         throw ServiceError(message: "Das ZIP-Verzeichnis ist beschädigt.")
       }
-      let methode = u16(bytes, position + 10)
-      let komprimiert = Int(u32(bytes, position + 20))
-      let unkomprimiert = Int(u32(bytes, position + 24))
-      let nameLaenge = Int(u16(bytes, position + 28))
-      let extraLaenge = Int(u16(bytes, position + 30))
-      let kommentarLaenge = Int(u16(bytes, position + 32))
-      let headerOffset = Int(u32(bytes, position + 42))
-      let name =
-        String(bytes: bytes[(position + 46)..<(position + 46 + nameLaenge)], encoding: .utf8) ?? ""
+      let methode = try u16(daten, position + 10)
+      let komprimiert = Int(try u32(daten, position + 20))
+      let unkomprimiert = Int(try u32(daten, position + 24))
+      let nameLaenge = Int(try u16(daten, position + 28))
+      let extraLaenge = Int(try u16(daten, position + 30))
+      let kommentarLaenge = Int(try u16(daten, position + 32))
+      let headerOffset = Int(try u32(daten, position + 42))
+      let name = String(decoding: try scheibe(daten, position + 46, nameLaenge), as: UTF8.self)
       eintraege.append(
         Eintrag(
           name: name, methode: methode, komprimiert: komprimiert,
@@ -307,18 +364,16 @@ private enum ZipReader {
   }
 
   static func extract(_ eintrag: Eintrag, from daten: Data) throws -> Data {
-    let bytes = [UInt8](daten)
     let header = eintrag.headerOffset
-    guard u32(bytes, header) == 0x0403_4B50 else {
+    guard try u32(daten, header) == 0x0403_4B50 else {
       throw ServiceError(message: "Ein ZIP-Eintrag ist beschädigt.")
     }
-    let nameLaenge = Int(u16(bytes, header + 26))
-    let extraLaenge = Int(u16(bytes, header + 28))
+    let nameLaenge = Int(try u16(daten, header + 26))
+    let extraLaenge = Int(try u16(daten, header + 28))
+    // Der lokale Header darf eigene Längen führen; deshalb hier neu lesen und
+    // nicht die aus dem Central Directory wiederverwenden.
     let start = header + 30 + nameLaenge + extraLaenge
-    guard start + eintrag.komprimiert <= bytes.count else {
-      throw ServiceError(message: "Ein ZIP-Eintrag ist unvollständig.")
-    }
-    let roh = Data(bytes[start..<(start + eintrag.komprimiert)])
+    let roh = try scheibe(daten, start, eintrag.komprimiert)
 
     switch eintrag.methode {
     case 0:
@@ -333,6 +388,10 @@ private enum ZipReader {
 
   private static func inflate(_ quelle: Data, erwartet: Int) throws -> Data {
     guard erwartet > 0 else { return Data() }
+    // baseAddress ist bei leerem Puffer nil – das darf nicht als Absturz enden.
+    guard !quelle.isEmpty else {
+      throw ServiceError(message: "Ein ZIP-Eintrag ließ sich nicht entpacken.")
+    }
     var ziel = Data(count: erwartet)
     let geschrieben = ziel.withUnsafeMutableBytes { zielPuffer in
       quelle.withUnsafeBytes { quellPuffer in
@@ -348,12 +407,32 @@ private enum ZipReader {
     return ziel
   }
 
-  private static func u16(_ bytes: [UInt8], _ index: Int) -> UInt16 {
-    UInt16(bytes[index]) | (UInt16(bytes[index + 1]) << 8)
+  // MARK: - Begrenztes Lesen
+  //
+  // Alle Offsets kommen aus dem Archiv und können beschädigt oder bösartig
+  // sein. Ohne diese Prüfungen beendet ein abgeschnittenes ZIP die App, statt
+  // eine Fehlermeldung zu zeigen.
+
+  /// Liefert die Bytes ab `offset`, oder wirft, wenn sie nicht vollständig im
+  /// Puffer liegen. Die Slice teilt sich den Speicher mit `daten`.
+  private static func scheibe(_ daten: Data, _ offset: Int, _ laenge: Int) throws -> Data {
+    guard offset >= 0, laenge >= 0, offset <= daten.count, laenge <= daten.count - offset else {
+      throw ServiceError(message: "Das ZIP-Archiv ist unvollständig oder beschädigt.")
+    }
+    let start = daten.startIndex + offset
+    return daten[start..<(start + laenge)]
   }
 
-  private static func u32(_ bytes: [UInt8], _ index: Int) -> UInt32 {
-    UInt32(bytes[index]) | (UInt32(bytes[index + 1]) << 8)
-      | (UInt32(bytes[index + 2]) << 16) | (UInt32(bytes[index + 3]) << 24)
+  private static func u16(_ daten: Data, _ offset: Int) throws -> UInt16 {
+    let bytes = try scheibe(daten, offset, 2)
+    let start = bytes.startIndex
+    return UInt16(bytes[start]) | (UInt16(bytes[start + 1]) << 8)
+  }
+
+  private static func u32(_ daten: Data, _ offset: Int) throws -> UInt32 {
+    let bytes = try scheibe(daten, offset, 4)
+    let start = bytes.startIndex
+    return UInt32(bytes[start]) | (UInt32(bytes[start + 1]) << 8)
+      | (UInt32(bytes[start + 2]) << 16) | (UInt32(bytes[start + 3]) << 24)
   }
 }

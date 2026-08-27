@@ -4,7 +4,7 @@ import SwiftUI
 
 struct ImageFeedView: View {
 
-  @State private var eintraege: [Entry] = []
+  @State private var gruppen: [Tagesgruppe] = []
   @State private var laedt = true
   @State private var fehler: String?
   @State private var vollbild: VollbildKontext?
@@ -18,14 +18,14 @@ struct ImageFeedView: View {
         LadeAnsicht()
       } else if let fehler {
         FehlerAnsicht(text: fehler) { Task { await laden() } }
-      } else if eintraege.isEmpty {
+      } else if gruppen.isEmpty {
         LeerAnsicht(symbol: "photo.on.rectangle", text: "Noch keine Bilder vorhanden.")
       } else {
         ScrollView {
           LazyVGrid(columns: spalten, spacing: 4) {
-            ForEach(gruppen, id: \.datum) { gruppe in
+            ForEach(gruppen) { gruppe in
               Section {
-                ForEach(gruppe.kacheln, id: \.id) { kachel in
+                ForEach(gruppe.kacheln) { kachel in
                   zelle(kachel)
                 }
               } header: {
@@ -60,28 +60,8 @@ struct ImageFeedView: View {
     }
   }
 
-  private struct Kachel {
-    let id: String
-    let entry: Entry
-    let datei: String
-  }
-
-  private var gruppen: [(datum: String, kacheln: [Kachel])] {
-    let sortiert = Dictionary(grouping: eintraege, by: \.kalenderDatum)
-      .sorted { $0.key > $1.key }
-    return sortiert.map { datum, tagesEintraege in
-      var kacheln: [Kachel] = []
-      for eintrag in tagesEintraege {
-        for datei in eintrag.bilderFiles {
-          kacheln.append(Kachel(id: "\(eintrag.id)/\(datei)", entry: eintrag, datei: datei))
-        }
-      }
-      return (datum: datum, kacheln: kacheln)
-    }
-  }
-
   @ViewBuilder
-  private func zelle(_ kachel: Kachel) -> some View {
+  private func zelle(_ kachel: Tagesgruppe.Kachel) -> some View {
     let thumb = MediaThumb(folder: kachel.entry.bilder, file: kachel.datei)
     if isVideoFile(kachel.datei) {
       NavigationLink(value: Ziel.video(url: thumb.quelle)) {
@@ -103,15 +83,49 @@ struct ImageFeedView: View {
   }
 
   private func laden() async {
-    laedt = eintraege.isEmpty
+    laedt = gruppen.isEmpty
     fehler = nil
     do {
-      eintraege = try await api.getEntriesWithImages(diary: AppSettings.activeDiary)
+      let eintraege = try await api.getEntriesWithImages(diary: AppSettings.activeDiary)
+      gruppen = Tagesgruppe.aus(eintraege)
     } catch {
       fehler = error.localizedDescription
-      eintraege = []
+      gruppen = []
     }
     laedt = false
+  }
+}
+
+/// Ein Tag der Galerie mit seinen Kacheln.
+///
+/// Wird einmal in `laden()` gebaut statt als computed property aus `body`:
+/// dort liefen Gruppierung und Sortierung bei jeder Recomposition erneut –
+/// also auch beim Scrollen und bei jedem Antippen.
+struct Tagesgruppe: Identifiable {
+
+  struct Kachel: Identifiable {
+    let id: String
+    let entry: Entry
+    let datei: String
+  }
+
+  let datum: String
+  let kacheln: [Kachel]
+
+  var id: String { datum }
+
+  static func aus(_ eintraege: [Entry]) -> [Tagesgruppe] {
+    Dictionary(grouping: eintraege, by: \.kalenderDatum)
+      .sorted { $0.key > $1.key }
+      .map { datum, tagesEintraege in
+        Tagesgruppe(
+          datum: datum,
+          kacheln: tagesEintraege.flatMap { eintrag in
+            eintrag.bilderFiles.map {
+              Kachel(id: "\(eintrag.id)/\($0)", entry: eintrag, datei: $0)
+            }
+          })
+      }
   }
 }
 

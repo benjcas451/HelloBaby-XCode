@@ -296,8 +296,15 @@ nonisolated final class LocalStore: @unchecked Sendable {
       let alt = Self.rootDirectory.appendingPathComponent("media_alt_\(UUID().uuidString)")
 
       // Medien tauschen; das alte Verzeichnis bleibt bis zum Erfolg liegen.
+      // Es muss zum atomaren Verschieben im selben Ordner liegen, gehört als
+      // Zwischenstand aber nicht ins iCloud-Backup – sonst wandert bei einem
+      // Absturz mitten im Restore die gesamte Mediensammlung doppelt hinein.
       if fm.fileExists(atPath: media.path) {
         try fm.moveItem(at: media, to: alt)
+        var werte = URLResourceValues()
+        werte.isExcludedFromBackup = true
+        var markierbar = alt
+        try? markierbar.setResourceValues(werte)
       }
       do {
         try fm.moveItem(at: stagedMedia, to: media)

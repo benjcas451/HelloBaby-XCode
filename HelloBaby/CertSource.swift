@@ -62,6 +62,14 @@ struct CertSource {
       throw ServiceError(
         message: "Zertifikats-Ordner nicht mehr erreichbar – bitte erneut auswählen.")
     }
+    // `stale` wurde bisher berechnet und dann verworfen. Nach einer
+    // Wiederherstellung auf einem neuen Gerät löst das Bookmark oft noch auf,
+    // zeigt aber ins Leere – der Nutzer sah dann „client.crt nicht gefunden“
+    // statt des eigentlichen Grundes.
+    guard !stale else {
+      throw ServiceError(
+        message: "Zertifikats-Ordner nicht mehr erreichbar – bitte erneut auswählen.")
+    }
     return try leseAus(ordner: ordner, mitScope: true)
   }
 
