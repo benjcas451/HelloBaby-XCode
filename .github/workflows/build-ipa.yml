@@ -40,7 +40,7 @@ jobs:
         with:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
           file: HelloBaby.ipa
-          asset_name: HelloBaby-v3.0.1-${{ github.run_number }}.ipa
-          tag: v3.0.1-${{ github.run_number }}
+          asset_name: HelloBaby-v3.0.2-${{ github.run_number }}.ipa
+          tag: v3.0.2-${{ github.run_number }}
           overwrite: true
-          body: "HelloBaby! v3.0.1 (Lauf ${{ github.run_number }}) – unsignierte IPA zum Sideloading"
+          body: "HelloBaby! v3.0.2 (Lauf ${{ github.run_number }}) – unsignierte IPA zum Sideloading"

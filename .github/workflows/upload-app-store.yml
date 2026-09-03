@@ -26,7 +26,7 @@ jobs:
     env:
       BUNDLE_ID: ch.tschir.HelloBaby
       TEAM_ID: 2HNRMGYGMU
-      MARKETING_VERSION: 3.0.1
+      MARKETING_VERSION: 3.0.2
 
     steps:
       - name: Checkout
