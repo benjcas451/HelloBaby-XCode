@@ -6,7 +6,7 @@ komplett lokal oder gegen eine eigene Server-API.
 
 - **Sprache/UI:** Swift, SwiftUI (eigenes Baby-Grün-Theme wie die Flutter-App)
 - **Bundle-ID:** `ch.tschir.HelloBaby` (identisch zur Flutter-App → Installation ist ein Update)
-- **Version:** 3.0.1, `CURRENT_PROJECT_VERSION` lokal 100, in CI `100 + run_number`
+- **Version:** 3.0.2, `CURRENT_PROJECT_VERSION` lokal 100, in CI `100 + run_number`
 - **Deployment-Target:** iOS 17
 
 ## Funktionsumfang
@@ -106,6 +106,9 @@ aus iCloud ist er einmal neu einzutragen.
 
 Client-Zertifikate (`client.crt` / `client.key`) liegen im App-Ordner der
 Dateien-App und sind nach einem Gerätewechsel gegebenenfalls neu abzulegen.
+Damit dieser Ordner dort überhaupt auftaucht, legt `AppOrdner` beim Start
+eine Hinweisdatei an, solange er sonst leer ist – iOS blendet leere
+App-Ordner aus.
 
 Ein selbst gewählter Zertifikats-Ordner wird als security-scoped Bookmark
 gespeichert. Die Leseberechtigung überlebt einen Gerätewechsel nicht;
@@ -127,7 +130,7 @@ Der Code ist unter `SWIFT_STRICT_CONCURRENCY=complete` warnungsfrei.
 ## CI
 
 - `.github/workflows/build-ipa.yml` (manuell): unsignierte IPA als
-  GitHub-Release (`v3.0.1-<run>`), zum Sideloading.
+  GitHub-Release (`v3.0.2-<run>`), zum Sideloading.
 - `.github/workflows/upload-app-store.yml` (manuell): signierte IPA nach
   App Store Connect / TestFlight. Benötigt das GitHub Environment
   `app-store` mit denselben sechs Secrets wie im früheren Flutter-Repo:

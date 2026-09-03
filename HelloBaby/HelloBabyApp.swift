@@ -19,6 +19,9 @@ struct HelloBabyApp: App {
 
   init() {
     AppSettings.migrationAusfuehren()
+    // Ohne mindestens eine Datei blendet iOS den App-Ordner in der
+    // „Dateien“-App aus – dort liegen aber client.crt/client.key.
+    AppOrdner.sichtbarMachen()
     Self.tmpAufraeumen()
   }
 
