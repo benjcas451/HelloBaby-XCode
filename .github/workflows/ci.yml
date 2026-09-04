@@ -50,6 +50,10 @@ jobs:
           fi
           echo "Bundle: $app"
           fehler=0
+          # UIFileSharingEnabled kommt aus AppInfo.plist,
+          # LSSupportsOpeningDocumentsInPlace aus INFOPLIST_KEY_*. Dass beide
+          # ankommen, belegt zugleich, dass Xcode die generierten Werte in die
+          # Datei hineinmergt statt sie zu ersetzen.
           for schluessel in UIFileSharingEnabled LSSupportsOpeningDocumentsInPlace; do
             wert=$(/usr/libexec/PlistBuddy -c "Print :$schluessel" \
               "$app/Info.plist" 2>/dev/null || echo FEHLT)
@@ -59,4 +63,13 @@ jobs:
               fehler=1
             fi
           done
+          # Zweiter, unabhaengiger Beleg fuer den Merge: die Version stammt aus
+          # MARKETING_VERSION und existiert nur, wenn generiert wurde.
+          version=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" \
+            "$app/Info.plist" 2>/dev/null || echo FEHLT)
+          echo "CFBundleShortVersionString = $version"
+          if [ "$version" = "FEHLT" ] || [ -z "$version" ]; then
+            echo "::error::CFBundleShortVersionString fehlt -- die generierten Info.plist-Werte kommen nicht mehr an"
+            fehler=1
+          fi
           exit $fehler

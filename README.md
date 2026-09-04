@@ -106,16 +106,26 @@ aus iCloud ist er einmal neu einzutragen.
 
 Client-Zertifikate (`client.crt` / `client.key`) liegen im App-Ordner der
 Dateien-App und sind nach einem Gerätewechsel gegebenenfalls neu abzulegen.
-Damit dieser Ordner dort überhaupt auftaucht, hält `AppOrdner` beim Start
-eine Hinweisdatei (`README.txt`) darin vor – iOS blendet App-Ordner ohne
-sichtbare Datei aus. Die Datei wird angelegt, sobald sie fehlt, und
-bewusst **ohne** vorherige Leer-Prüfung: `contentsOfDirectory` zählt auch
-unsichtbare Punkt-Dateien mit, für iOS gilt der Ordner damit trotzdem als
-leer. Genau daran scheiterte der erste Anlauf.
+Dafür müssen zwei Dinge zusammenkommen:
 
-Der Build-Check prüft am gebauten Bundle, dass `UIFileSharingEnabled` und
-`LSSupportsOpeningDocumentsInPlace` wirklich als Boolean in der generierten
-Info.plist stehen, und schlägt sonst fehl.
+1. **`UIFileSharingEnabled` und `LSSupportsOpeningDocumentsInPlace` im
+   Bundle.** `UIFileSharingEnabled` steht in `AppInfo.plist` und **nicht**
+   als `INFOPLIST_KEY_UIFileSharingEnabled` im Projekt: diesen Schlüssel
+   kennt Xcode als Build-Setting nicht und verwirft ihn kommentarlos. Genau
+   daran lag es – der Schlüssel stand im Projekt und kam nie im Binary an.
+   `GENERATE_INFOPLIST_FILE` bleibt `YES`; Xcode nimmt `AppInfo.plist` als
+   Basis und mergt die `INFOPLIST_KEY_*`-Werte hinein.
+2. **Mindestens eine sichtbare Datei in `Documents/`.** iOS blendet den
+   Ordner sonst aus. `AppOrdner` hält dafür beim Start eine `README.txt`
+   vor und legt sie an, sobald sie fehlt – bewusst ohne Leer-Prüfung:
+   `contentsOfDirectory` zählt auch unsichtbare Punkt-Dateien mit, für iOS
+   gilt der Ordner damit trotzdem als leer.
+
+Der Build-Check liest beide Schlüssel mit `PlistBuddy` aus dem gebauten
+Bundle und schlägt fehl, wenn einer nicht `true` ist. Dass beide ankommen –
+einer aus der Datei, einer aus den Build-Settings – belegt zugleich, dass
+der Merge greift; `CFBundleShortVersionString` wird als zweiter Beleg
+mitgeprüft.
 
 Ein selbst gewählter Zertifikats-Ordner wird als security-scoped Bookmark
 gespeichert. Die Leseberechtigung überlebt einen Gerätewechsel nicht;
