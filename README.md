@@ -6,7 +6,7 @@ komplett lokal oder gegen eine eigene Server-API.
 
 - **Sprache/UI:** Swift, SwiftUI (eigenes Baby-Grün-Theme wie die Flutter-App)
 - **Bundle-ID:** `ch.tschir.HelloBaby` (identisch zur Flutter-App → Installation ist ein Update)
-- **Version:** 3.0.2, `CURRENT_PROJECT_VERSION` lokal 100, in CI `100 + run_number`
+- **Version:** 3.0.3, `CURRENT_PROJECT_VERSION` lokal 100, in CI `100 + run_number`
 - **Deployment-Target:** iOS 17
 
 ## Funktionsumfang
@@ -106,9 +106,26 @@ aus iCloud ist er einmal neu einzutragen.
 
 Client-Zertifikate (`client.crt` / `client.key`) liegen im App-Ordner der
 Dateien-App und sind nach einem Gerätewechsel gegebenenfalls neu abzulegen.
-Damit dieser Ordner dort überhaupt auftaucht, legt `AppOrdner` beim Start
-eine Hinweisdatei an, solange er sonst leer ist – iOS blendet leere
-App-Ordner aus.
+Dafür müssen zwei Dinge zusammenkommen:
+
+1. **`UIFileSharingEnabled` und `LSSupportsOpeningDocumentsInPlace` im
+   Bundle.** `UIFileSharingEnabled` steht in `AppInfo.plist` und **nicht**
+   als `INFOPLIST_KEY_UIFileSharingEnabled` im Projekt: diesen Schlüssel
+   kennt Xcode als Build-Setting nicht und verwirft ihn kommentarlos. Genau
+   daran lag es – der Schlüssel stand im Projekt und kam nie im Binary an.
+   `GENERATE_INFOPLIST_FILE` bleibt `YES`; Xcode nimmt `AppInfo.plist` als
+   Basis und mergt die `INFOPLIST_KEY_*`-Werte hinein.
+2. **Mindestens eine sichtbare Datei in `Documents/`.** iOS blendet den
+   Ordner sonst aus. `AppOrdner` hält dafür beim Start eine `README.txt`
+   vor und legt sie an, sobald sie fehlt – bewusst ohne Leer-Prüfung:
+   `contentsOfDirectory` zählt auch unsichtbare Punkt-Dateien mit, für iOS
+   gilt der Ordner damit trotzdem als leer.
+
+Der Build-Check liest beide Schlüssel mit `PlistBuddy` aus dem gebauten
+Bundle und schlägt fehl, wenn einer nicht `true` ist. Dass beide ankommen –
+einer aus der Datei, einer aus den Build-Settings – belegt zugleich, dass
+der Merge greift; `CFBundleShortVersionString` wird als zweiter Beleg
+mitgeprüft.
 
 Ein selbst gewählter Zertifikats-Ordner wird als security-scoped Bookmark
 gespeichert. Die Leseberechtigung überlebt einen Gerätewechsel nicht;
@@ -130,7 +147,7 @@ Der Code ist unter `SWIFT_STRICT_CONCURRENCY=complete` warnungsfrei.
 ## CI
 
 - `.github/workflows/build-ipa.yml` (manuell): unsignierte IPA als
-  GitHub-Release (`v3.0.2-<run>`), zum Sideloading.
+  GitHub-Release (`v3.0.3-<run>`), zum Sideloading.
 - `.github/workflows/upload-app-store.yml` (manuell): signierte IPA nach
   App Store Connect / TestFlight. Benötigt das GitHub Environment
   `app-store` mit denselben sechs Secrets wie im früheren Flutter-Repo:

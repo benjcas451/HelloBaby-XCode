@@ -514,6 +514,9 @@ struct SettingsView: View {
   }
 
   private func pruefeZertifikate() {
+    // Nebenbei: legt die Hinweisdatei an, falls sie fehlt. Damit laesst sich
+    // der App-Ordner in der Dateien-App auch ohne Neustart hervorholen.
+    AppOrdner.sichtbarMachen()
     certsOk = certSource.sindVorhanden
     certLabel = certSource.locationLabel
   }
