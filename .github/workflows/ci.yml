@@ -28,4 +28,35 @@ jobs:
             -sdk iphoneos \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGN_IDENTITY="" \
+            -derivedDataPath DerivedData \
             build
+
+      # Die beiden Schluessel entscheiden, ob der App-Ordner in der
+      # "Dateien"-App ueberhaupt auftaucht. Sie stehen als INFOPLIST_KEY_*
+      # im Projekt; ob sie dort wirklich als Boolean in der generierten
+      # Info.plist landen, sieht man erst am gebauten Bundle. Deshalb hier
+      # geprueft statt angenommen - ein stiller Ausfall hat schon einmal
+      # eine Version gekostet.
+      - name: Dateien-App-Schluessel in der Info.plist pruefen
+        run: |
+          set -euo pipefail
+          app=""
+          for kandidat in DerivedData/Build/Products/Release-iphoneos/*.app; do
+            if [ -d "$kandidat" ]; then app="$kandidat"; break; fi
+          done
+          if [ -z "$app" ]; then
+            echo "::error::Kein gebautes .app-Bundle gefunden"
+            exit 1
+          fi
+          echo "Bundle: $app"
+          fehler=0
+          for schluessel in UIFileSharingEnabled LSSupportsOpeningDocumentsInPlace; do
+            wert=$(/usr/libexec/PlistBuddy -c "Print :$schluessel" \
+              "$app/Info.plist" 2>/dev/null || echo FEHLT)
+            echo "$schluessel = $wert"
+            if [ "$wert" != "true" ]; then
+              echo "::error::$schluessel ist '$wert' statt 'true' -- der App-Ordner bleibt in der Dateien-App unsichtbar"
+              fehler=1
+            fi
+          done
+          exit $fehler
