@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Muss hier stehen und nicht als INFOPLIST_KEY_UIFileSharingEnabled im
+	     Projekt: diesen Schluessel kennt Xcode als Build-Setting nicht und
+	     verwirft ihn stillschweigend. Der Build-Check in ci.yml liest beide
+	     Schluessel aus dem gebauten Bundle, damit das nicht noch einmal
+	     unbemerkt durchrutscht.
+
+	     GENERATE_INFOPLIST_FILE bleibt YES: Xcode nimmt diese Datei als Basis
+	     und mergt die INFOPLIST_KEY_*-Werte hinein. -->
+	<key>UIFileSharingEnabled</key>
+	<true/>
+</dict>
+</plist>

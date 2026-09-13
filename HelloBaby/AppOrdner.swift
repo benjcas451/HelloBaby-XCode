@@ -18,14 +18,24 @@ enum AppOrdner {
     FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
   }
 
-  /// Schreibt die Hinweisdatei, solange sonst nichts im Ordner liegt.
+  /// Stellt sicher, dass die Hinweisdatei existiert.
   ///
-  /// Sobald eigene Dateien vorhanden sind, passiert nichts mehr – eine vom
-  /// Nutzer gelöschte Hinweisdatei bleibt dann also gelöscht.
+  /// Bewusst ohne Prüfung, ob der Ordner leer ist: `contentsOfDirectory`
+  /// zählt auch unsichtbare Dateien mit (Punkt-Dateien, Reste von iCloud
+  /// oder einem Restore). Für iOS gilt der Ordner damit trotzdem als leer –
+  /// die frühere Prüfung sprang in dem Fall nicht an und der Ordner blieb
+  /// in der Dateien-App unsichtbar.
+  ///
+  /// Die Datei kostet ein paar hundert Byte und wird nach dem Löschen beim
+  /// nächsten Start neu angelegt; genau so ist sie auch beschrieben.
   static func sichtbarMachen() {
-    let inhalt = (try? FileManager.default.contentsOfDirectory(atPath: documents.path)) ?? []
-    guard inhalt.isEmpty else { return }
-    try? Data(hinweis.utf8).write(to: documents.appendingPathComponent(hinweisName))
+    let ordner = documents
+    // Auf einem frischen Gerät kann Documents/ noch fehlen; ohne den Ordner
+    // liefe das Schreiben ins Leere.
+    try? FileManager.default.createDirectory(at: ordner, withIntermediateDirectories: true)
+    let ziel = ordner.appendingPathComponent(hinweisName)
+    guard !FileManager.default.fileExists(atPath: ziel.path) else { return }
+    try? Data(hinweis.utf8).write(to: ziel)
   }
 
   private static let hinweis = """
@@ -39,8 +49,8 @@ enum AppOrdner {
     Alternativ lässt sich in den Einstellungen der App ein beliebiger anderer
     Ordner auswählen, in dem die beiden Dateien liegen.
 
-    Diese Datei darf gelöscht werden. Ist der Ordner danach vollständig leer,
-    blendet iOS ihn in der Dateien-App allerdings wieder aus – beim nächsten
-    Start der App wird sie deshalb neu angelegt.
+    Diese Datei darf gelöscht werden. Sie wird beim nächsten Start der App
+    neu angelegt: iOS blendet den Ordner in der Dateien-App aus, sobald er
+    keine sichtbare Datei mehr enthält.
     """
 }
