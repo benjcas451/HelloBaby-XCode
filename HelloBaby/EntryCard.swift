@@ -219,7 +219,10 @@ struct MediaThumb: View {
 
   /// Kantenlänge der Vorschau in Pixeln. Die Kachel ist im 3-spaltigen Grid
   /// keine 150 pt breit; 600 px decken auch @3x mit Reserve ab.
-  static let vorschauKante = 600
+  ///
+  /// nonisolated, damit `vorschaubild` sie auch ausserhalb des MainActor
+  /// lesen darf.
+  nonisolated static let vorschauKante = 600
 
   /// Rechnet das Bild schon beim Dekodieren herunter.
   ///
@@ -228,7 +231,9 @@ struct MediaThumb: View {
   /// gleichzeitig im Speicher. Genau das ist der klassische Weg, wie iOS eine
   /// Galerie wegen Speichermangels beendet. Videos waren über
   /// `AVAssetImageGenerator.maximumSize` längst gedeckelt, Standbilder nicht.
-  static func vorschaubild(pfad: String) -> UIImage? {
+  // nonisolated, weil der Aufrufer ein Task.detached ist: ohne das ist der
+  // Zugriff von ausserhalb des MainActor in Swift 6 ein Fehler.
+  nonisolated static func vorschaubild(pfad: String) -> UIImage? {
     let quelle = CGImageSourceCreateWithURL(URL(fileURLWithPath: pfad) as CFURL, nil)
     guard let quelle else { return nil }
     let optionen: [CFString: Any] = [

@@ -228,7 +228,7 @@ final class ApiClient: NSObject, @unchecked Sendable {
     guard let objekt = json as? [String: Any] else {
       throw ServiceError(message: "Unerwartete Antwort beim Erstellen.")
     }
-    await OfflineStatus.shared.melde(grund: nil)
+    OfflineStatus.shared.melde(grund: nil)
     return objekt["id"] as? Int ?? Int("\(objekt["id"] ?? "")") ?? 0
   }
 
@@ -246,7 +246,7 @@ final class ApiClient: NSObject, @unchecked Sendable {
         kalenderDatum: kalenderDatum, fields: fields, vonName: vonName, diary: diary,
         medienOrdner: medien.ordner, medien: medien.dateien)
     }
-    await OfflineStatus.shared.melde(grund: grund)
+    OfflineStatus.shared.melde(grund: grund)
     return id
   }
 
@@ -263,7 +263,7 @@ final class ApiClient: NSObject, @unchecked Sendable {
     } catch {
       guard Netzfehler.aus(error) == .nieGesendet else { throw error }
       loescheVorgemerkt(id: id, diary: diary)
-      await OfflineStatus.shared.melde(grund: Netzfehler.meldung(error))
+      OfflineStatus.shared.melde(grund: Netzfehler.meldung(error))
     }
   }
 
@@ -294,12 +294,12 @@ final class ApiClient: NSObject, @unchecked Sendable {
     }
     do {
       let neu = try await favoritDirekt(id: id, diary: diary)
-      await OfflineStatus.shared.melde(grund: nil)
+      OfflineStatus.shared.melde(grund: nil)
       return neu
     } catch {
       guard Netzfehler.aus(error) == .nieGesendet else { throw error }
       schreibeWarteschlange { $0.schalteFavorit(id: id, diary: diary) }
-      await OfflineStatus.shared.melde(grund: Netzfehler.meldung(error))
+      OfflineStatus.shared.melde(grund: Netzfehler.meldung(error))
       return aktuell == 1 ? 0 : 1
     }
   }
@@ -355,14 +355,14 @@ final class ApiClient: NSObject, @unchecked Sendable {
         erledige(naechste, speicher: speicher)
       } catch {
         if Netzfehler.aus(error) != nil {
-          await OfflineStatus.shared.melde(grund: Netzfehler.meldung(error))
+          OfflineStatus.shared.melde(grund: Netzfehler.meldung(error))
           return verworfen
         }
         erledige(naechste, speicher: speicher)
         verworfen.append(error.localizedDescription)
       }
     }
-    await OfflineStatus.shared.melde(grund: nil)
+    OfflineStatus.shared.melde(grund: nil)
     return verworfen
   }
 
@@ -429,7 +429,7 @@ final class ApiClient: NSObject, @unchecked Sendable {
       let json = try Self.pruefen(data: data, response: response)
       if lesend {
         speicher?.speichereAntwort(data, pfad: pfad, query: query)
-        await OfflineStatus.shared.melde(grund: nil)
+        OfflineStatus.shared.melde(grund: nil)
       }
       return json
     } catch {
@@ -437,7 +437,7 @@ final class ApiClient: NSObject, @unchecked Sendable {
         let daten = speicher?.ladeAntwort(pfad: pfad, query: query),
         let json = try? JSONSerialization.jsonObject(with: daten)
       else { throw error }
-      await OfflineStatus.shared.melde(grund: Netzfehler.meldung(error))
+      OfflineStatus.shared.melde(grund: Netzfehler.meldung(error))
       return json
     }
   }
