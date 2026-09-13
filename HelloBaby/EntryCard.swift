@@ -116,7 +116,11 @@ struct EntryCard: View {
     favoritLaeuft = true
     Task {
       do {
-        let neu = try await api.toggleFavorite(id: entry.id, diary: entry.diary)
+        // Den aktuellen Stand mitgeben: ohne Verbindung bildet der Client
+        // den neuen Wert daraus selbst, die API liefert ihn sonst erst in
+        // ihrer Antwort.
+        let neu = try await api.toggleFavorite(
+          id: entry.id, diary: entry.diary, aktuell: favorit ? 1 : 0)
         favorit = neu == 1
       } catch {
         onMeldung("Favorit fehlgeschlagen: \(error.localizedDescription)")
@@ -181,17 +185,14 @@ struct MediaThumb: View {
             Rectangle().fill(Color.black.opacity(istVideo ? 0.85 : 0.08))
           }
         } else {
-          AsyncImage(url: URL(string: ApiClient.shared.thumbUrl(quelle))) { phase in
-            switch phase {
-            case .success(let bild):
-              bild.resizable().scaledToFill()
-            case .failure:
-              Rectangle().fill(Color.black.opacity(0.1))
-                .overlay(Image(systemName: "photo").foregroundStyle(.secondary))
-            default:
-              Rectangle().fill(Color.black.opacity(0.05))
-                .overlay(ProgressView())
-            }
+          MedienBild(url: ApiClient.shared.thumbUrl(quelle)) { bild in
+            bild.resizable().scaledToFill()
+          } platzhalter: {
+            Rectangle().fill(Color.black.opacity(0.05))
+              .overlay(ProgressView())
+          } fehler: {
+            Rectangle().fill(Color.black.opacity(0.1))
+              .overlay(Image(systemName: "photo").foregroundStyle(.secondary))
           }
         }
       }

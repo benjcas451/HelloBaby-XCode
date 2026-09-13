@@ -14,11 +14,19 @@ struct HomeView: View {
   @State private var letzterZufall: String?
   @State private var meldung: String?
 
+  @ObservedObject private var offline = OfflineStatus.shared
+  @Environment(\.scenePhase) private var szenenPhase
+
   private let api = ApiClient.shared
 
   var body: some View {
     ScrollView {
       VStack(spacing: 16) {
+        // Offline-Hinweis über allem: der Nutzer soll sofort sehen, dass er
+        // zwar weiterarbeiten kann, der Stand aber noch nicht beim Server ist.
+        if offline.grund != nil || offline.ausstehend > 0 {
+          OfflineBanner(grund: offline.grund, ausstehend: offline.ausstehend)
+        }
         Picker("Tagebuch", selection: $diary) {
           Text("Schwangerschaft").tag("schwangerschaft")
           Text("Entwicklung").tag("entwicklung")
@@ -87,6 +95,15 @@ struct HomeView: View {
       // Beim ersten Anzeigen und nach jeder Rückkehr neu laden.
       if pfad.isEmpty { await laden() }
     }
+    // Rückkehr aus dem Hintergrund: nachladen und dabei die Warteschlange
+    // abarbeiten – zwischendurch kann die Verbindung wiedergekommen sein,
+    // ohne dass die Wache lief.
+    .onChange(of: szenenPhase) { _, neu in
+      if neu == .active { Task { await laden() } }
+    }
+    .onReceive(Verbindungswache.shared.wiederVerbunden) { _ in
+      Task { await laden() }
+    }
     .alert(
       "Hinweis",
       isPresented: .init(get: { meldung != nil }, set: { if !$0 { meldung = nil } })
@@ -138,6 +155,14 @@ struct HomeView: View {
   private func laden() async {
     laedt = stats == nil
     fehler = nil
+    // Erst das Liegengebliebene loswerden, dann laden: sonst zeigte die
+    // Statistik einen Serverstand ohne die eigenen Einträge.
+    let verworfen = await api.nachholen()
+    if !verworfen.isEmpty {
+      meldung = verworfen.count == 1
+        ? "Ein wartender Eintrag wurde vom Server abgelehnt: \(verworfen[0])"
+        : "\(verworfen.count) wartende Einträge wurden vom Server abgelehnt."
+    }
     do {
       stats = try await api.getStats(diary: diary)
     } catch {
@@ -170,5 +195,43 @@ struct HomeView: View {
     formatter.locale = Locale(identifier: "en_US_POSIX")
     formatter.dateFormat = "yyyy-MM-dd"
     return formatter.string(from: Date())
+  }
+}
+
+/// Hinweisleiste über dem Inhalt: Verbindung weg, App weiter benutzbar.
+struct OfflineBanner: View {
+  /// Grund der abgebrochenen Verbindung; nil heisst „wieder online, aber es
+  /// wartet noch etwas auf die Übertragung“.
+  let grund: String?
+  let ausstehend: Int
+
+  var body: some View {
+    HStack(alignment: .top, spacing: 10) {
+      Image(systemName: grund == nil ? "arrow.up.circle" : "wifi.slash")
+        .font(.system(size: 16, weight: .semibold))
+      VStack(alignment: .leading, spacing: 2) {
+        Text(titel).font(.subheadline.bold())
+        Text(untertitel).font(.caption)
+      }
+      Spacer(minLength: 0)
+    }
+    .foregroundStyle(Hb.hinweisText)
+    .padding(12)
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .background(Hb.hinweisFlaeche)
+    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+  }
+
+  private var titel: String {
+    guard let grund else { return "Übertragung läuft" }
+    return "Offline-Modus – \(grund)"
+  }
+
+  private var untertitel: String {
+    guard ausstehend > 0 else {
+      return "Angezeigt wird der zuletzt geladene Stand."
+    }
+    let was = ausstehend == 1 ? "Ein Eintrag wartet" : "\(ausstehend) Einträge warten"
+    return "\(was) auf die Übertragung und geht raus, sobald die Verbindung steht."
   }
 }
