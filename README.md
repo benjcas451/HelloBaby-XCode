@@ -15,9 +15,9 @@ komplett lokal oder gegen eine eigene Server-API.
 - Tages-, Monats-, Favoriten- und Galerie-Ansichten, zufälliger Tag
 - Eintrag erstellen mit Fotos/Videos (Fotomediathek, Kamera), Upload-Fortschritt
 - Datenquellen: lokal (SQLite + Medienordner) oder Server-API
-  (API-Key oder mTLS-Client-Zertifikat; Zertifikats-Ordner wahlweise der
-  App-Ordner in der Dateien-App oder ein frei gewählter Ordner per
-  security-scoped Bookmark)
+  (API-Key, mTLS-Client-Zertifikat oder Cloudflare Service Token;
+  Zertifikats-Ordner wahlweise der App-Ordner in der Dateien-App oder ein
+  frei gewählter Ordner per security-scoped Bookmark)
 - ZIP-Backup/-Wiederherstellung (Format kompatibel zur Flutter-App;
   geschrieben als STORE, gelesen werden STORE und DEFLATE)
 - Einmaliger Import lokaler Einträge zur Server-API (mit Duplikatschutz)
@@ -55,9 +55,73 @@ passendem HTTP-Status.
 | `GET /api/gallery.php?folder=uploads/<ordner>` | Dateien einer Galerie |
 
 Vorschaubilder und Video-Poster liefert `/api/thumb.php`, die Medien selbst
-`/api/media.php?file=…` (`&download=1` erzwingt den Download); beide sind ohne
-Auth erreichbar. Die geschützten Endpunkte authentifizieren je nach Modus über
-den Header `X-API-Key` oder das Client-Zertifikat.
+`/api/media.php?file=…` (`&download=1` erzwingt den Download).
+
+**Authentifizierung** je nach Modus: Header `X-API-Key`, Client-Zertifikat
+auf Transport-Ebene, oder die Cloudflare-Header `CF-Access-Client-Id` und
+`CF-Access-Client-Secret` (seit 3.1.0; beide Hälften liegen in eigenen
+Keychain-Accounts und gehen nur gemeinsam raus). Der API-Key ist in den
+Modi mTLS und Cloudflare optional.
+
+**Medien laufen seit 3.1.0 über dieselben Kopfzeilen.** Vorher liefen
+Vorschaubilder, Vollbilder und Videos über `AsyncImage` bzw. `AVPlayer` und
+damit an `ApiClient` vorbei — ohne Key, ohne Zertifikat. Solange der Server
+diese Endpunkte offen auslieferte, fiel das nicht auf; hinter Cloudflare
+Access blockiert der Rand jede dieser Anfragen. Bilder holt jetzt
+`MedienBild`/`MedienLader` über eine Session mit denselben Kopfzeilen und
+demselben Client-Zertifikat, Videos bekommen sie per
+`AVURLAssetHTTPHeaderFieldsKey` mit.
+
+**Access-Abweisung:** Ohne gültiges Token antwortet Cloudflare nicht mit
+einem Fehler, sondern leitet auf die Login-Seite des Teams um. `URLSession`
+folgt dem, sodass eine HTML-Seite mit Status 200 ankommt. `ApiClient` und
+`MedienLader` erkennen das am Host der finalen Antwort (Subdomain von
+`cloudflareaccess.com`) bzw. an einem 403 mit `cf-ray`-Header und melden es
+als Token-Problem.
+
+## Offline-Betrieb
+
+Bricht die Verbindung weg, bleibt die App benutzbar. Die Logik sitzt im
+`ApiClient` selbst (er ist die einzige Datenquelle, es gibt kein Protokoll zum
+Umhüllen) und greift nur in den Server-Modi.
+
+**Lesen:** Jede erfolgreiche GET-Antwort landet roh als JSON in
+`Application Support/Offline/antworten_<zugang>/`, benannt nach Pfad und
+sortierten Parametern. Scheitert eine Abfrage an einem Netzwerkfehler, kommt
+die Antwort von dort. Damit funktionieren Tagesansicht, Monatsansicht,
+Favoriten, Galerie und Statistik gleichermassen, ohne je eine eigene
+Zwischenspeicher-Logik zu brauchen.
+
+**Schreiben:** Anlegen, Löschen und das Umschalten eines Favoriten gehen in
+eine Warteschlange, wenn sie den Server nachweislich nie erreicht haben (kein
+Netz, DNS, Verbindungsaufbau, TLS). Eine Zeitüberschreitung oder ein Abbruch
+mitten in der Übertragung ist mehrdeutig — der Server könnte den Eintrag
+längst haben, ein zweiter Versuch legte dann einen zweiten an. Gerade beim
+Hochladen eines Videos ist das der wahrscheinlichere Fall, deshalb bleibt es
+dort bei der Fehlermeldung.
+
+**Medien wandern mit.** Ein offline erstellter Eintrag behält seine Fotos und
+Videos: Die Dateien werden nach
+`Application Support/Offline/medien_<zugang>/<uuid>/` kopiert und von dort
+hochgeladen. Kopiert wird bewusst — die Originale aus der Fotomediathek liegen
+in einem temporären Ordner, den das System jederzeit räumen darf. Nach
+erfolgreichem Upload (oder wenn der Eintrag verworfen wird) verschwindet der
+Ordner; verwaiste Ordner ohne zugehörige Aktion räumt das Nachholen auf.
+
+**Ordnung.** Neue Einträge bekommen eine negative lokale Kennung. Eine
+Löschung, die einen noch wartenden Eintrag trifft, entfernt dessen Aktion
+samt Favoriten-Umschaltungen und Medien. Solange etwas ansteht, geht auch ein
+neuer Schreibzugriff hinten dran statt am Stau vorbei.
+
+**Abgearbeitet** wird vor jedem Laden des Startbildschirms, beim Zurückkehren
+aus dem Hintergrund und sobald `NWPathMonitor` wieder einen Pfad meldet. Das
+Nachholen benutzt die rohen Aufrufe (`ladeHoch`, `loescheDirekt`,
+`favoritDirekt`) statt der öffentlichen Methoden — sonst würde es dieselbe
+Aktion in einer Schleife erneut vormerken. Beim ersten Verbindungsfehler
+bricht der Durchlauf ab, der Rest bleibt in der Reihenfolge stehen. Vom Server
+inhaltlich zurückgewiesene Aktionen fliegen raus und werden einmal gemeldet.
+
+Die Ablage hängt am Zugang (Modus + Server-URL).
 
 **Datenmodell.** Die lokale Tabelle `entries` spiegelt exakt das Modell der
 API (Spaltenordnung wie in der Flutter-App):
@@ -94,15 +158,16 @@ Auf iOS gibt es kein Gegenstück zu Androids `backup_rules.xml` /
 |---|---|---|
 | Einträge (SQLite) | ✅ | ✅ |
 | Medien (Fotos/Videos) | ✅ | ✅ |
-| API-Key (Keychain) | ❌ | ✅ |
+| API-Key & Service Token (Keychain) | ❌ | ✅ |
 | Client-Zertifikat | ❌ | ❌ |
 
-Der API-Key liegt in der Keychain, mit `kSecAttrAccessibleAfterFirstUnlock`
-und **ohne** `kSecAttrSynchronizable`. Damit ist er beim Direkttransfer und
+Der API-Key und beide Hälften des Cloudflare Service Tokens liegen in der
+Keychain, mit `kSecAttrAccessibleAfterFirstUnlock`
+und **ohne** `kSecAttrSynchronizable`. Damit sind sie beim Direkttransfer und
 im verschlüsselten Finder-Backup dabei, aus einem iCloud-Backup dagegen nicht
 wiederherstellbar — die iOS-Entsprechung der Android-Entscheidung
 „`<device-transfer>` ja, `<cloud-backup>` nein“. Nach einer Wiederherstellung
-aus iCloud ist er einmal neu einzutragen.
+aus iCloud sind sie einmal neu einzutragen.
 
 Client-Zertifikate (`client.crt` / `client.key`) liegen im App-Ordner der
 Dateien-App und sind nach einem Gerätewechsel gegebenenfalls neu abzulegen.

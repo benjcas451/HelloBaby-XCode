@@ -340,15 +340,12 @@ private struct ZoombaresBild: View {
         Image(systemName: "photo").foregroundStyle(.white)
       }
     } else {
-      AsyncImage(url: URL(string: ApiClient.shared.mediaUrl(folder + "/" + file))) { phase in
-        switch phase {
-        case .success(let bild):
-          bild.resizable().scaledToFit()
-        case .failure:
-          Image(systemName: "photo").foregroundStyle(.white)
-        default:
-          ProgressView().tint(.white)
-        }
+      MedienBild(url: ApiClient.shared.mediaUrl(folder + "/" + file)) { bild in
+        bild.resizable().scaledToFit()
+      } platzhalter: {
+        ProgressView().tint(.white)
+      } fehler: {
+        Image(systemName: "photo").foregroundStyle(.white)
       }
     }
   }

@@ -17,12 +17,16 @@ private let apiInfoText = """
   • POST /api/favorite.php mit {"id":…, "diary":"…"} – Favorit umschalten
   • GET /api/gallery.php?folder=uploads/<ordner> – Dateien einer Galerie
 
-  Bilder/Video-Poster liefert /api/thumb.php (offen, ohne Auth), die Medien \
-  selbst /api/media.php?file=… (offen; &download=1 erzwingt den Download).
+  Bilder/Video-Poster liefert /api/thumb.php, die Medien selbst \
+  /api/media.php?file=… (&download=1 erzwingt den Download). Die App ruft \
+  beide mit denselben Kopfzeilen ab wie die übrigen Endpunkte — hinter \
+  Cloudflare Access ist das zwingend, sonst blockiert der Rand die Anfrage.
 
-  Authentifizierung der geschützten Endpunkte je nach Modus:
+  Authentifizierung je nach Modus:
   • API-Key: HTTP-Header X-API-Key
-  • mTLS: Client-Zertifikat (client.crt + client.key)
+  • mTLS: Client-Zertifikat (client.crt + client.key), API-Key optional
+  • Cloudflare Access: Header CF-Access-Client-Id und \
+  CF-Access-Client-Secret, API-Key optional
 
   Fehler kommen als {"error": "…"} mit passendem HTTP-Statuscode.
   """
@@ -95,6 +99,8 @@ struct SettingsView: View {
   @State private var mode = AppSettings.mode
   @State private var serverUrl = AppSettings.serverBase
   @State private var apiKey = AppSettings.apiKey
+  @State private var cfClientId = AppSettings.cfAccessClientId
+  @State private var cfClientSecret = AppSettings.cfAccessClientSecret
   @State private var appName = AppSettings.appName
   @State private var nutzer = AppSettings.users
   @State private var standardNutzer = AppSettings.defaultUser
@@ -323,7 +329,8 @@ struct SettingsView: View {
       auswahl(
         gewaehlt: mode != .local,
         titel: "API",
-        untertitel: "Server-API mit API-Key oder Client-Zertifikat."
+        untertitel: "Server-API mit API-Key, Client-Zertifikat oder "
+          + "Cloudflare Service Token."
       ) {
         if mode == .local {
           mode = .apiKey
@@ -392,6 +399,15 @@ struct SettingsView: View {
           api.reset()
           pruefeZertifikate()
         }
+        auswahl(
+          gewaehlt: mode == .cloudflare,
+          titel: "Cloudflare Access",
+          untertitel: "Service Token, API-Key optional zusätzlich"
+        ) {
+          mode = .cloudflare
+          AppSettings.mode = .cloudflare
+          api.reset()
+        }
       }
 
       Section("Server") {
@@ -437,8 +453,31 @@ struct SettingsView: View {
           }
         }
 
+        // Cloudflare Access prüft das Service Token am Rand und reicht die
+        // Anfrage erst danach an den Server weiter. Beide Hälften sind nötig:
+        // mit einer weist Cloudflare genauso ab wie ganz ohne.
+        if mode == .cloudflare {
+          SecureField("Client-ID", text: $cfClientId)
+            .textInputAutocapitalization(.never)
+            .autocorrectionDisabled()
+            .onChange(of: cfClientId) { _, neu in
+              AppSettings.cfAccessClientId = neu
+              api.reset()
+            }
+          SecureField("Client-Secret", text: $cfClientSecret)
+            .textInputAutocapitalization(.never)
+            .autocorrectionDisabled()
+            .onChange(of: cfClientSecret) { _, neu in
+              AppSettings.cfAccessClientSecret = neu
+              api.reset()
+            }
+          Text("Beide Teile des Service Tokens. Sie laufen ab, standardmäßig nach einem Jahr.")
+            .font(.footnote)
+            .foregroundStyle(.secondary)
+        }
+
         SecureField(
-          mode == .mtls ? "API-Key (optional)" : "API-Key", text: $apiKey
+          mode == .apiKey ? "API-Key" : "API-Key (optional)", text: $apiKey
         )
         .textInputAutocapitalization(.never)
         .autocorrectionDisabled()
