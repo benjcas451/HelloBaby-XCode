@@ -26,6 +26,13 @@ enum Hb {
   static let chipHell = Color(hex: 0xEDF3E6)
   static let chipDunkel = Color(hex: 0x20271F)
 
+  // Hinweisleiste (Offline-Modus): warme Fläche, die sich vom Grün absetzt,
+  // ohne wie ein Fehler zu wirken.
+  static let hinweisFlaeche = Color(
+    light: Color(hex: 0xFBF0D2), dark: Color(hex: 0x3B3117))
+  static let hinweisText = Color(
+    light: Color(hex: 0x6B5312), dark: Color(hex: 0xF3DFA4))
+
   /// Vorder­grundfarbe nach Helligkeit der Fläche (wie die Flutter-App).
   static func vordergrund(fuer farbe: Color) -> Color {
     UIColor(farbe).luminanz > 0.6 ? .black : .white
@@ -33,6 +40,15 @@ enum Hb {
 }
 
 extension Color {
+  /// Farbe, die sich dem Farbschema anpasst – für Tokens, die hell und dunkel
+  /// verschieden aussehen müssen.
+  init(light: Color, dark: Color) {
+    self.init(
+      UIColor { merkmale in
+        merkmale.userInterfaceStyle == .dark ? UIColor(dark) : UIColor(light)
+      })
+  }
+
   init(hex: UInt32) {
     self.init(
       red: Double((hex >> 16) & 0xFF) / 255,

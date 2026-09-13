@@ -79,6 +79,50 @@ folgt dem, sodass eine HTML-Seite mit Status 200 ankommt. `ApiClient` und
 `cloudflareaccess.com`) bzw. an einem 403 mit `cf-ray`-Header und melden es
 als Token-Problem.
 
+## Offline-Betrieb
+
+Bricht die Verbindung weg, bleibt die App benutzbar. Die Logik sitzt im
+`ApiClient` selbst (er ist die einzige Datenquelle, es gibt kein Protokoll zum
+Umhüllen) und greift nur in den Server-Modi.
+
+**Lesen:** Jede erfolgreiche GET-Antwort landet roh als JSON in
+`Application Support/Offline/antworten_<zugang>/`, benannt nach Pfad und
+sortierten Parametern. Scheitert eine Abfrage an einem Netzwerkfehler, kommt
+die Antwort von dort. Damit funktionieren Tagesansicht, Monatsansicht,
+Favoriten, Galerie und Statistik gleichermassen, ohne je eine eigene
+Zwischenspeicher-Logik zu brauchen.
+
+**Schreiben:** Anlegen, Löschen und das Umschalten eines Favoriten gehen in
+eine Warteschlange, wenn sie den Server nachweislich nie erreicht haben (kein
+Netz, DNS, Verbindungsaufbau, TLS). Eine Zeitüberschreitung oder ein Abbruch
+mitten in der Übertragung ist mehrdeutig — der Server könnte den Eintrag
+längst haben, ein zweiter Versuch legte dann einen zweiten an. Gerade beim
+Hochladen eines Videos ist das der wahrscheinlichere Fall, deshalb bleibt es
+dort bei der Fehlermeldung.
+
+**Medien wandern mit.** Ein offline erstellter Eintrag behält seine Fotos und
+Videos: Die Dateien werden nach
+`Application Support/Offline/medien_<zugang>/<uuid>/` kopiert und von dort
+hochgeladen. Kopiert wird bewusst — die Originale aus der Fotomediathek liegen
+in einem temporären Ordner, den das System jederzeit räumen darf. Nach
+erfolgreichem Upload (oder wenn der Eintrag verworfen wird) verschwindet der
+Ordner; verwaiste Ordner ohne zugehörige Aktion räumt das Nachholen auf.
+
+**Ordnung.** Neue Einträge bekommen eine negative lokale Kennung. Eine
+Löschung, die einen noch wartenden Eintrag trifft, entfernt dessen Aktion
+samt Favoriten-Umschaltungen und Medien. Solange etwas ansteht, geht auch ein
+neuer Schreibzugriff hinten dran statt am Stau vorbei.
+
+**Abgearbeitet** wird vor jedem Laden des Startbildschirms, beim Zurückkehren
+aus dem Hintergrund und sobald `NWPathMonitor` wieder einen Pfad meldet. Das
+Nachholen benutzt die rohen Aufrufe (`ladeHoch`, `loescheDirekt`,
+`favoritDirekt`) statt der öffentlichen Methoden — sonst würde es dieselbe
+Aktion in einer Schleife erneut vormerken. Beim ersten Verbindungsfehler
+bricht der Durchlauf ab, der Rest bleibt in der Reihenfolge stehen. Vom Server
+inhaltlich zurückgewiesene Aktionen fliegen raus und werden einmal gemeldet.
+
+Die Ablage hängt am Zugang (Modus + Server-URL).
+
 **Datenmodell.** Die lokale Tabelle `entries` spiegelt exakt das Modell der
 API (Spaltenordnung wie in der Flutter-App):
 

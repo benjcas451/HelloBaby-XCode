@@ -38,6 +38,16 @@ final class ApiClient: NSObject, @unchecked Sendable {
     }
   }
 
+  /// Ablage für Zwischenspeicher und Warteschlange des aktuellen Zugangs;
+  /// nil im lokalen Modus, der ohnehin ohne Server auskommt.
+  private var speicher: OfflineSpeicher? {
+    let modus = AppSettings.mode
+    guard modus != .local else { return nil }
+    let basis = AppSettings.serverBase
+    guard !basis.isEmpty else { return nil }
+    return OfflineSpeicher(zugang: "\(modus.rawValue)|\(basis)")
+  }
+
   /// Verwirft Session und mTLS-Identity, z. B. nach geänderten Einstellungen.
   func reset() {
     // Medien hängen an denselben Zugangsdaten – ihr Cache muss mit weg,
@@ -133,7 +143,32 @@ final class ApiClient: NSObject, @unchecked Sendable {
         kalenderDatum: kalenderDatum, fields: fields, vonName: vonName,
         images: images, diary: diary)
     }
+    // Reihenfolge wahren: Steht schon etwas an, gehört auch das Neue hinten
+    // dran, statt es am Stau vorbeizuschicken.
+    if !(aktuelleWarteschlange?.istLeer ?? true) {
+      return try await vormerken(
+        kalenderDatum: kalenderDatum, fields: fields, vonName: vonName,
+        images: images, diary: diary, grund: OfflineStatus.letzterGrund)
+    }
+    do {
+      return try await ladeHoch(
+        kalenderDatum: kalenderDatum, fields: fields, vonName: vonName,
+        images: images, diary: diary, onSendProgress: onSendProgress)
+    } catch {
+      guard Netzfehler.aus(error) == .nieGesendet else { throw error }
+      return try await vormerken(
+        kalenderDatum: kalenderDatum, fields: fields, vonName: vonName,
+        images: images, diary: diary, grund: Netzfehler.meldung(error))
+    }
+  }
 
+  /// Lädt einen Eintrag samt Medien hoch. Ohne Offline-Logik — so benutzt ihn
+  /// auch das Nachholen, das sonst in einer Schleife wieder vormerken würde.
+  private func ladeHoch(
+    kalenderDatum: String, fields: [String: String], vonName: String,
+    images: [URL], diary: String,
+    onSendProgress: (@Sendable (Int64, Int64) -> Void)? = nil
+  ) async throws -> Int {
     // Den Multipart-Body in eine temporäre Datei streamen statt in den
     // Speicher: Videos können hunderte MB groß sein.
     let boundary = "hellobaby-\(UUID().uuidString)"
@@ -193,19 +228,85 @@ final class ApiClient: NSObject, @unchecked Sendable {
     guard let objekt = json as? [String: Any] else {
       throw ServiceError(message: "Unerwartete Antwort beim Erstellen.")
     }
+    await OfflineStatus.shared.melde(grund: nil)
     return objekt["id"] as? Int ?? Int("\(objekt["id"] ?? "")") ?? 0
+  }
+
+  /// Merkt einen Eintrag samt seiner Medien für später vor und liefert die
+  /// negative lokale Kennung.
+  private func vormerken(
+    kalenderDatum: String, fields: [String: String], vonName: String,
+    images: [URL], diary: String, grund: String
+  ) async throws -> Int {
+    guard let speicher else { throw ServiceError(message: grund) }
+    let medien = try speicher.uebernehmeMedien(images)
+    var id = -1
+    schreibeWarteschlange { warteschlange in
+      id = warteschlange.lege(
+        kalenderDatum: kalenderDatum, fields: fields, vonName: vonName, diary: diary,
+        medienOrdner: medien.ordner, medien: medien.dateien)
+    }
+    await OfflineStatus.shared.melde(grund: grund)
+    return id
   }
 
   func deleteEntry(id: Int, diary: String) async throws {
     if isLocal { return try await local.deleteEntry(id: id, diary: diary) }
+    // Negative IDs kennt nur die App: der Eintrag wartet noch. Und solange
+    // etwas ansteht, bleibt die Reihenfolge gewahrt.
+    if id < 0 || !(aktuelleWarteschlange?.istLeer ?? true) {
+      loescheVorgemerkt(id: id, diary: diary)
+      return
+    }
+    do {
+      try await loescheDirekt(id: id, diary: diary)
+    } catch {
+      guard Netzfehler.aus(error) == .nieGesendet else { throw error }
+      loescheVorgemerkt(id: id, diary: diary)
+      await OfflineStatus.shared.melde(grund: Netzfehler.meldung(error))
+    }
+  }
+
+  /// Löscht ohne Offline-Logik — so benutzt es auch das Nachholen.
+  private func loescheDirekt(id: Int, diary: String) async throws {
     _ = try await senden(
       "DELETE", pfad: "entries.php", query: ["id": String(id), "diary": diary])
   }
 
+  private func loescheVorgemerkt(id: Int, diary: String) {
+    var ordner: String?
+    schreibeWarteschlange { ordner = $0.loesche(id: id, diary: diary) }
+    // Die Medien eines nie hochgeladenen Eintrags können gleich mit weg.
+    if let ordner { speicher?.raeumeMedien(ordner: ordner) }
+  }
+
   /// Kehrt den Favoriten-Status um und liefert den neuen Wert.
+  ///
+  /// `aktuell` braucht es nur für den Offline-Fall: Die API kennt lediglich
+  /// „umschalten“ und liefert den neuen Wert erst in ihrer Antwort — ohne
+  /// Verbindung muss die App ihn selbst bilden.
   @discardableResult
-  func toggleFavorite(id: Int, diary: String) async throws -> Int {
+  func toggleFavorite(id: Int, diary: String, aktuell: Int = 0) async throws -> Int {
     if isLocal { return try await local.toggleFavorite(id: id, diary: diary) }
+    if id < 0 || !(aktuelleWarteschlange?.istLeer ?? true) {
+      schreibeWarteschlange { $0.schalteFavorit(id: id, diary: diary) }
+      return aktuell == 1 ? 0 : 1
+    }
+    do {
+      let neu = try await favoritDirekt(id: id, diary: diary)
+      await OfflineStatus.shared.melde(grund: nil)
+      return neu
+    } catch {
+      guard Netzfehler.aus(error) == .nieGesendet else { throw error }
+      schreibeWarteschlange { $0.schalteFavorit(id: id, diary: diary) }
+      await OfflineStatus.shared.melde(grund: Netzfehler.meldung(error))
+      return aktuell == 1 ? 0 : 1
+    }
+  }
+
+  /// Schaltet ohne Offline-Logik um — so benutzt es auch das Nachholen.
+  @discardableResult
+  private func favoritDirekt(id: Int, diary: String) async throws -> Int {
     var request = URLRequest(url: try urlFuer(pfad: "favorite.php", query: [:]))
     request.httpMethod = "POST"
     request.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -214,6 +315,84 @@ final class ApiClient: NSObject, @unchecked Sendable {
     let (data, response) = try await aktuelleSession().data(for: request)
     let json = try Self.pruefen(data: data, response: response)
     return ((json as? [String: Any])?["favorit"] as? Int) ?? 0
+  }
+
+  // MARK: - Warteschlange
+
+  /// Die offenen Schreibzugriffe des aktuellen Zugangs; nil im lokalen Modus.
+  private var aktuelleWarteschlange: Warteschlange? {
+    speicher?.ladeWarteschlange()
+  }
+
+  private func schreibeWarteschlange(_ aenderung: (inout Warteschlange) -> Void) {
+    guard let speicher else { return }
+    var warteschlange = speicher.ladeWarteschlange()
+    aenderung(&warteschlange)
+    speicher.speichere(warteschlange)
+    let anzahl = warteschlange.anzahl
+    Task { @MainActor in OfflineStatus.shared.melde(ausstehend: anzahl) }
+  }
+
+  /// Arbeitet die Warteschlange von vorn ab.
+  ///
+  /// Bricht beim ersten Verbindungsfehler ab — der Rest bleibt in der
+  /// Reihenfolge stehen. Weist der Server eine Aktion inhaltlich zurück (etwa
+  /// einen längst gelöschten Eintrag), fliegt sie raus und wird gemeldet;
+  /// sonst blockierte sie die Warteschlange für immer.
+  ///
+  /// Liefert die Meldungen zu verworfenen Aktionen.
+  @discardableResult
+  func nachholen() async -> [String] {
+    guard let speicher, !isLocal else { return [] }
+    // Medienordner ohne zugehörige Aktion aufräumen – etwa nach einem
+    // Absturz zwischen Kopieren und Vormerken.
+    speicher.raeumeVerwaisteMedien(behalte: medienOrdnerDerWarteschlange(speicher))
+
+    var verworfen: [String] = []
+    while let naechste = speicher.ladeWarteschlange().aktionen.first {
+      do {
+        try await sende(naechste, speicher: speicher)
+        erledige(naechste, speicher: speicher)
+      } catch {
+        if Netzfehler.aus(error) != nil {
+          await OfflineStatus.shared.melde(grund: Netzfehler.meldung(error))
+          return verworfen
+        }
+        erledige(naechste, speicher: speicher)
+        verworfen.append(error.localizedDescription)
+      }
+    }
+    await OfflineStatus.shared.melde(grund: nil)
+    return verworfen
+  }
+
+  private func sende(_ aktion: Warteaktion, speicher: OfflineSpeicher) async throws {
+    switch aktion {
+    case .anlegen(let a):
+      _ = try await ladeHoch(
+        kalenderDatum: a.kalenderDatum, fields: a.fields, vonName: a.vonName,
+        images: speicher.medienUrls(ordner: a.medienOrdner, dateien: a.medien),
+        diary: a.diary)
+    case .loeschen(let id, let diary):
+      try await loescheDirekt(id: id, diary: diary)
+    case .favorit(let id, let diary):
+      try await favoritDirekt(id: id, diary: diary)
+    }
+  }
+
+  /// Nimmt die erledigte (oder verworfene) Aktion aus der Warteschlange und
+  /// räumt ihre Medien weg.
+  private func erledige(_ aktion: Warteaktion, speicher: OfflineSpeicher) {
+    schreibeWarteschlange { $0.entferneErste() }
+    if case .anlegen(let a) = aktion { speicher.raeumeMedien(ordner: a.medienOrdner) }
+  }
+
+  private func medienOrdnerDerWarteschlange(_ speicher: OfflineSpeicher) -> Set<String> {
+    var ordner = Set<String>()
+    for aktion in speicher.ladeWarteschlange().aktionen {
+      if case .anlegen(let a) = aktion { ordner.insert(a.medienOrdner) }
+    }
+    return ordner
   }
 
   // MARK: - Transport
@@ -235,14 +414,32 @@ final class ApiClient: NSObject, @unchecked Sendable {
     return json
   }
 
+  /// Führt eine Anfrage aus. Lesende Anfragen landen im Zwischenspeicher und
+  /// werden bei einem Netzwerkfehler von dort beantwortet — ob die Anfrage
+  /// ankam, spielt beim Lesen keine Rolle.
   private func senden(_ methode: String, pfad: String, query: [String: String])
     async throws -> Any
   {
     var request = URLRequest(url: try urlFuer(pfad: pfad, query: query))
     request.httpMethod = methode
     auth(&request)
-    let (data, response) = try await aktuelleSession().data(for: request)
-    return try Self.pruefen(data: data, response: response)
+    let lesend = methode == "GET"
+    do {
+      let (data, response) = try await aktuelleSession().data(for: request)
+      let json = try Self.pruefen(data: data, response: response)
+      if lesend {
+        speicher?.speichereAntwort(data, pfad: pfad, query: query)
+        await OfflineStatus.shared.melde(grund: nil)
+      }
+      return json
+    } catch {
+      guard lesend, Netzfehler.aus(error) != nil,
+        let daten = speicher?.ladeAntwort(pfad: pfad, query: query),
+        let json = try? JSONSerialization.jsonObject(with: daten)
+      else { throw error }
+      await OfflineStatus.shared.melde(grund: Netzfehler.meldung(error))
+      return json
+    }
   }
 
   private func urlFuer(pfad: String, query: [String: String]) throws -> URL {

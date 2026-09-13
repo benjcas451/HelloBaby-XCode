@@ -116,7 +116,11 @@ struct EntryCard: View {
     favoritLaeuft = true
     Task {
       do {
-        let neu = try await api.toggleFavorite(id: entry.id, diary: entry.diary)
+        // Den aktuellen Stand mitgeben: ohne Verbindung bildet der Client
+        // den neuen Wert daraus selbst, die API liefert ihn sonst erst in
+        // ihrer Antwort.
+        let neu = try await api.toggleFavorite(
+          id: entry.id, diary: entry.diary, aktuell: favorit ? 1 : 0)
         favorit = neu == 1
       } catch {
         onMeldung("Favorit fehlgeschlagen: \(error.localizedDescription)")
