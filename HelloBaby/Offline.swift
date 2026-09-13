@@ -251,8 +251,12 @@ final class Verbindungswache: ObservableObject {
 
   private init() {
     wache.pathUpdateHandler = { [weak self] pfad in
+      // Erst auspacken, dann in den Task: `self?` im Task griffe auf die
+      // schwache Bindung der äußeren Closure zu, und ein solcher Zugriff aus
+      // nebenläufigem Code ist in Swift 6 ein Fehler.
+      guard let self else { return }
       let verbunden = pfad.status == .satisfied
-      Task { @MainActor in self?.pfadGeaendert(verbunden) }
+      Task { @MainActor in self.pfadGeaendert(verbunden) }
     }
     wache.start(queue: DispatchQueue(label: "hellobaby.verbindungswache"))
   }
