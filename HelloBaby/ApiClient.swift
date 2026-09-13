@@ -5,9 +5,11 @@ import Security
 /// Baby-Tagebuch-REST-API an (`<serverBase>/api/...`). Endpunkte, Parameter
 /// und JSON-Felder identisch zur Flutter-/Android-App.
 ///
-/// Authentifizierung der API je nach Modus: API-Key (`X-API-Key`-Header)
-/// und/oder mTLS-Client-Zertifikat. Medien und Thumbnails liefert der Server
-/// ohne Authentifizierung aus.
+/// Authentifizierung der API je nach Modus: API-Key (`X-API-Key`-Header),
+/// mTLS-Client-Zertifikat und/oder Cloudflare-Access-Service-Token — auch in
+/// Kombination. Medien und Thumbnails laufen seit 3.1.0 über dieselben
+/// Kopfzeilen (`authHeader`), weil Cloudflare Access sonst auch sie am Rand
+/// abweist.
 final class ApiClient: NSObject, @unchecked Sendable {
 
   static let shared = ApiClient()
@@ -38,6 +40,9 @@ final class ApiClient: NSObject, @unchecked Sendable {
 
   /// Verwirft Session und mTLS-Identity, z. B. nach geänderten Einstellungen.
   func reset() {
+    // Medien hängen an denselben Zugangsdaten – ihr Cache muss mit weg,
+    // sonst zeigt die App nach einem Serverwechsel weiter alte Bilder.
+    MedienLader.shared.reset()
     lock.lock()
     session?.invalidateAndCancel()
     session = nil
@@ -253,10 +258,27 @@ final class ApiClient: NSObject, @unchecked Sendable {
 
   private func auth(_ request: inout URLRequest) {
     request.setValue("application/json", forHTTPHeaderField: "Accept")
+    for (feld, wert) in Self.authHeader {
+      request.setValue(wert, forHTTPHeaderField: feld)
+    }
+  }
+
+  /// Die Kopfzeilen, mit denen sich die App ausweist – als Wörterbuch, weil
+  /// auch Medien darüber laufen (`AVURLAsset` und `MedienLader` nehmen keine
+  /// `URLRequest` entgegen).
+  ///
+  /// Der API-Key geht in jedem Server-Modus mit, sofern hinterlegt; im
+  /// Cloudflare-Modus kommen die beiden Hälften des Service Tokens dazu.
+  static var authHeader: [String: String] {
+    var header: [String: String] = [:]
     let key = AppSettings.apiKey
     if !key.isEmpty {
-      request.setValue(key, forHTTPHeaderField: "X-API-Key")
+      header["X-API-Key"] = key
     }
+    if AppSettings.mode == .cloudflare, let token = CloudflareServiceToken.ausEinstellungen {
+      header.merge(token.header) { _, neu in neu }
+    }
+    return header
   }
 
   /// Baut die Session lazily; bei Moduswechsel (mTLS an/aus) neu.
@@ -282,6 +304,11 @@ final class ApiClient: NSObject, @unchecked Sendable {
   }
 
   private static func pruefen(data: Data, response: URLResponse) throws -> Any {
+    if let http = response as? HTTPURLResponse,
+      let hinweis = CloudflareServiceToken.abweisung(http)
+    {
+      throw ServiceError(message: hinweis, statusCode: http.statusCode)
+    }
     guard let http = response as? HTTPURLResponse else {
       throw ServiceError(message: "Unerwartete Antwort des Servers.")
     }

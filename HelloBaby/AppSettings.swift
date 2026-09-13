@@ -9,6 +9,9 @@ enum DataSourceMode: String {
   case mtls
   /// Server-API mit API-Key (`X-API-Key`-Header).
   case apiKey
+  /// Server-API hinter Cloudflare Access, ausgewiesen per Service Token
+  /// (`CF-Access-Client-Id`/`CF-Access-Client-Secret`).
+  case cloudflare
 }
 
 /// Lädt und speichert App-Einstellungen (UserDefaults) – mit einer Ausnahme:
@@ -72,7 +75,7 @@ enum AppSettings {
       (defaults.string(forKey: Key.apiKey) ?? defaults.string(forKey: "flutter." + Key.apiKey))?
       .trimmingCharacters(in: .whitespaces) ?? ""
     if !klartext.isEmpty {
-      ApiKeyStore.speichere(klartext)
+      ApiKeyStore.speichere(klartext, fuer: .apiKey)
     }
     defaults.removeObject(forKey: Key.apiKey)
     defaults.removeObject(forKey: "flutter." + Key.apiKey)
@@ -86,8 +89,24 @@ enum AppSettings {
 
   /// Liegt in der Keychain statt in den UserDefaults – siehe `ApiKeyStore`.
   static var apiKey: String {
-    get { ApiKeyStore.lade() }
-    set { ApiKeyStore.speichere(newValue.trimmingCharacters(in: .whitespaces)) }
+    get { ApiKeyStore.lade(.apiKey) }
+    set { ApiKeyStore.speichere(newValue.trimmingCharacters(in: .whitespaces), fuer: .apiKey) }
+  }
+
+  /// Client-ID des Cloudflare Service Tokens (endet üblicherweise auf
+  /// `.access`). Kein Geheimnis im engeren Sinn, liegt aber beim zugehörigen
+  /// Secret, damit beide gemeinsam gesetzt und gelöscht werden.
+  static var cfAccessClientId: String {
+    get { ApiKeyStore.lade(.cfClientId) }
+    set { ApiKeyStore.speichere(newValue.trimmingCharacters(in: .whitespaces), fuer: .cfClientId) }
+  }
+
+  /// Client-Secret des Cloudflare Service Tokens.
+  static var cfAccessClientSecret: String {
+    get { ApiKeyStore.lade(.cfClientSecret) }
+    set {
+      ApiKeyStore.speichere(newValue.trimmingCharacters(in: .whitespaces), fuer: .cfClientSecret)
+    }
   }
 
   /// Basis-URL des Servers ohne abschließenden Slash; leer = nicht gesetzt.
@@ -165,13 +184,22 @@ enum AppSettings {
 private enum ApiKeyStore {
 
   private static let service = "ch.tschir.HelloBaby"
-  private static let account = "api-key"
 
-  static func lade() -> String {
+  /// Welcher Wert gemeint ist – jeder liegt unter eigenem Keychain-Account.
+  enum Ablage: String {
+    /// Der API-Key (Account-Name unverändert seit 3.0.0).
+    case apiKey = "api-key"
+    /// Client-ID des Cloudflare Service Tokens.
+    case cfClientId = "cf-access-client-id"
+    /// Client-Secret des Cloudflare Service Tokens.
+    case cfClientSecret = "cf-access-client-secret"
+  }
+
+  static func lade(_ ablage: Ablage) -> String {
     let query: [String: Any] = [
       kSecClass as String: kSecClassGenericPassword,
       kSecAttrService as String: service,
-      kSecAttrAccount as String: account,
+      kSecAttrAccount as String: ablage.rawValue,
       kSecReturnData as String: true,
       kSecMatchLimit as String: kSecMatchLimitOne,
     ]
@@ -185,24 +213,24 @@ private enum ApiKeyStore {
 
   /// Ein leerer Key bedeutet „kein Key hinterlegt“ – dann bleibt auch nichts
   /// in der Keychain liegen.
-  static func speichere(_ key: String) {
-    loesche()
+  static func speichere(_ key: String, fuer ablage: Ablage) {
+    loesche(ablage)
     guard !key.isEmpty else { return }
     let item: [String: Any] = [
       kSecClass as String: kSecClassGenericPassword,
       kSecAttrService as String: service,
-      kSecAttrAccount as String: account,
+      kSecAttrAccount as String: ablage.rawValue,
       kSecValueData as String: Data(key.utf8),
       kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlock,
     ]
     SecItemAdd(item as CFDictionary, nil)
   }
 
-  static func loesche() {
+  static func loesche(_ ablage: Ablage) {
     let query: [String: Any] = [
       kSecClass as String: kSecClassGenericPassword,
       kSecAttrService as String: service,
-      kSecAttrAccount as String: account,
+      kSecAttrAccount as String: ablage.rawValue,
     ]
     SecItemDelete(query as CFDictionary)
   }
