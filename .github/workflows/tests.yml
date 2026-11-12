@@ -1,0 +1,117 @@
+name: Tests
+
+# Unit-Tests im iOS-Simulator. ci.yml prüft nur, ob der Code übersetzt; hier
+# läuft er wirklich: StueckUploadTests lädt Medien über den ApiClient in
+# Stücken zu einem nachgestellten Server (ci/upload_attrappe.py) hoch –
+# samt verlorener Antworten, Server ohne das Verfahren und fehlender
+# Verbindung.
+on:
+  push:
+    branches: [main, "claude/**"]
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: Unit-Tests (iOS-Simulator)
+    runs-on: macos-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      # Kein fester Gerätename: welche Simulatoren es gibt, hängt von der
+      # Xcode-Version des Runners ab. Genommen wird ein iPhone der neuesten
+      # vorhandenen iOS-Laufzeit.
+      - name: Simulator wählen
+        run: |
+          set -euo pipefail
+          xcodebuild -version
+          udid=$(xcrun simctl list devices available -j | python3 -c '
+          import json, re, sys
+          geraete = json.load(sys.stdin)["devices"]
+          def version(laufzeit):
+              return [int(z) for z in re.findall(r"\d+", laufzeit.split("iOS-")[-1])]
+          for laufzeit in sorted((l for l in geraete if "iOS-" in l), key=version, reverse=True):
+              for geraet in geraete[laufzeit]:
+                  if geraet["name"].startswith("iPhone"):
+                      print(geraet["udid"])
+                      print(geraet["name"], laufzeit, file=sys.stderr)
+                      sys.exit(0)
+          sys.exit("kein iPhone-Simulator gefunden")
+          ')
+          echo "SIMULATOR=$udid" >> "$GITHUB_ENV"
+
+      # Die Attrappe spricht unverschlüsseltes HTTP auf 127.0.0.1. Die
+      # Ausnahme dafür gehört nicht in die ausgelieferte App – sie wird nur
+      # in diesem Checkout eingetragen.
+      - name: Lokale Verbindungen für den Testlauf erlauben
+        run: |
+          /usr/libexec/PlistBuddy \
+            -c "Add :NSAppTransportSecurity dict" \
+            -c "Add :NSAppTransportSecurity:NSAllowsLocalNetworking bool true" \
+            AppInfo.plist
+
+      - name: Nachgestellten Server starten
+        run: |
+          nohup python3 ci/upload_attrappe.py 18765 > attrappe.log 2>&1 &
+          for versuch in $(seq 1 20); do
+            if curl -fs http://127.0.0.1:18765/bereit; then exit 0; fi
+            sleep 0.5
+          done
+          echo "::error::Attrappe ist nicht gestartet"
+          cat attrappe.log
+          exit 1
+
+      # Nur HelloBabyTests: die UI-Tests aus der Xcode-Vorlage starten die App
+      # mehrfach und prüfen nichts.
+      - name: Tests ausführen
+        run: |
+          set -o pipefail
+          xcodebuild test \
+            -project HelloBaby.xcodeproj \
+            -scheme HelloBaby \
+            -destination "platform=iOS Simulator,id=$SIMULATOR" \
+            -only-testing:HelloBabyTests \
+            -parallel-testing-enabled NO \
+            -derivedDataPath DerivedData \
+            -resultBundlePath Ergebnis.xcresult \
+            2>&1 | tee xcodebuild.log \
+            | grep -iE "error:|Test case .*(passed|failed|skipped)|Test suite|Executed [0-9]+ tests|\*\* TEST|Failing tests" \
+            || true
+          grep -q "\*\* TEST SUCCEEDED \*\*" xcodebuild.log
+          # Übersprungene Tests wären ein stiller Ausfall der Attrappe.
+          if grep -iE "Test case .*StueckUploadTests.* skipped" xcodebuild.log; then
+            echo "::error::StueckUploadTests wurden übersprungen"
+            exit 1
+          fi
+
+      # xcodebuild nennt bei einem Fehlschlag nur den Namen des Tests; die
+      # Meldung der gescheiterten Prüfung steht im Ergebnis-Bundle.
+      - name: Meldungen der gescheiterten Tests
+        if: failure()
+        run: |
+          xcrun xcresulttool get test-results summary --path Ergebnis.xcresult --compact \
+            | python3 -c '
+          import json, sys
+          bericht = json.load(sys.stdin)
+          print(bericht.get("result"), {k: bericht.get(k) for k in ("passedTests", "failedTests", "skippedTests")})
+          for fehler in bericht.get("testFailures", []):
+              print("-", fehler.get("testName"), "::", fehler.get("failureText"))
+          ' || true
+
+      - name: Protokoll der Attrappe
+        if: always()
+        run: tail -n 80 attrappe.log || true
+
+      - name: Fehlerstellen aus dem Build-Protokoll
+        if: failure()
+        run: grep -nE "error|failed|Testing failed|BUILD FAILED" xcodebuild.log | tail -n 80 || tail -n 120 xcodebuild.log
+
+      - name: Protokolle sichern
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: testprotokolle
+          path: |
+            xcodebuild.log
+            attrappe.log
+          if-no-files-found: ignore

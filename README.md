@@ -49,13 +49,58 @@ passendem HTTP-Status.
 |---|---|
 | `GET /api/stats.php?diary=<id>` | erster/letzter Eintrag, zufälliges Datum |
 | `GET /api/entries.php?date=YYYY-MM-DD&diary=<id>` | Einträge eines Tages (ebenso `?year=&month=`, `?favorites=1`, `?images=1`) |
-| `POST /api/entries.php` | Eintrag anlegen (`multipart/form-data`): Felder je Tagebuch + `kalender_datum`, `von_name`, `diary`, optional `images[]` |
+| `POST /api/entries.php?upload=init` | Medium anmelden (`name`, `size`) → `upload_id`, `chunk_size` |
+| `POST /api/entries.php?upload=chunk&id=…&offset=…` | ein Stück als Roh-Body (`application/octet-stream`) |
+| `GET /api/entries.php?upload=status&id=…` | Stand eines Uploads: `received`, `complete`, `bereit` |
+| `POST /api/entries.php` | Eintrag anlegen: Felder je Tagebuch + `kalender_datum`, `von_name`, `diary`, Medien als `uploads[]` (Kennungen der fertigen Uploads) |
 | `DELETE /api/entries.php?id=<id>&diary=<id>` | Eintrag löschen |
 | `POST /api/favorite.php` | Favorit umschalten, Body `{"id":…, "diary":"…"}` |
 | `GET /api/gallery.php?folder=uploads/<ordner>` | Dateien einer Galerie |
 
 Vorschaubilder und Video-Poster liefert `/api/thumb.php`, die Medien selbst
 `/api/media.php?file=…` (`&download=1` erzwingt den Download).
+
+### Medien in Stücken (seit 3.2.0)
+
+Vor dem Server steht Cloudflare, das im Free-Tarif jede Anfrage auf 100 MB
+begrenzt und nach 100 Sekunden ohne Antwort abbricht. Ein längeres Video
+passt damit weder in eine einzelne Anfrage, noch darf seine Umwandlung
+(ffmpeg) in der Anfrage laufen, die den Eintrag anlegt. `ApiClient` lädt
+deshalb jede Datei einzeln hoch, bevor der Eintrag entsteht
+(`ladeInStuecken`):
+
+1. **Anmelden** — `?upload=init` mit Name und Größe. Der Server antwortet mit
+   der Kennung und der Stückgröße (derzeit 8 MiB); die App richtet sich nach
+   dem Server, nicht nach einem eigenen Wert.
+2. **Stücke senden** — der Reihe nach, jeweils mit dem Offset des ersten
+   Bytes. Passt der Offset nicht zum Stand des Servers, kommt `409` samt
+   `received` zurück. So setzt die App nach einem Abbruch dort fort, wo der
+   Server wirklich steht, statt von vorn zu beginnen; ob ein Stück noch
+   ankam, fragt sie über `?upload=status` ab.
+3. **Auf Videos warten** — nach dem letzten Stück wandelt der Server ein
+   Video im Hintergrund um. Die App fragt den Stand alle zwei Sekunden ab,
+   bis `bereit` wahr ist; die Oberfläche zeigt so lange „Medien werden
+   verarbeitet…“.
+4. **Eintrag anlegen** — eine kleine Anfrage mit den Feldern und `uploads[]`.
+
+Schritt 4 ist wiederholbar: Der Server merkt sich, in welchen Eintrag ein
+Upload eingegangen ist, und liefert bei derselben Anfrage denselben Eintrag
+zurück. Die App wiederholt sie deshalb bei einem Verbindungsfehler selbst.
+
+Kennt der Server das Verfahren nicht (älterer Stand), fällt die App auf die
+eine multipart-Anfrage mit `images[]` zurück (`ladeHochKlassisch`). Erkennbar
+ist das an der Antwort auf die erste Anmeldung: `400` ohne das Feld
+`upload_fehler`, das der neue Server jeder Ablehnung mitgibt.
+
+`HelloBabyTests/StueckUploadTests.swift` prüft das Verfahren über den
+`ApiClient` gegen einen nachgestellten Server (`ci/upload_attrappe.py`):
+Inhalt und Reihenfolge der Stücke, Fortsetzen nach verlorener Antwort,
+Rückfall bei einem Server ohne das Verfahren und der Weg in die
+Warteschlange. Der Workflow `tests.yml` lässt das bei jedem Push auf `main`
+und `claude/**` im iOS-Simulator laufen. Lokal vorher
+`python3 ci/upload_attrappe.py 18765` starten — ohne ihn werden die Tests
+übersprungen — und für den Testlauf `NSAllowsLocalNetworking` in
+`AppInfo.plist` eintragen (der Workflow tut das nur in seinem Checkout).
 
 **Authentifizierung** je nach Modus: Header `X-API-Key`, Client-Zertifikat
 auf Transport-Ebene, oder die Cloudflare-Header `CF-Access-Client-Id` und
@@ -96,9 +141,14 @@ Zwischenspeicher-Logik zu brauchen.
 eine Warteschlange, wenn sie den Server nachweislich nie erreicht haben (kein
 Netz, DNS, Verbindungsaufbau, TLS). Eine Zeitüberschreitung oder ein Abbruch
 mitten in der Übertragung ist mehrdeutig — der Server könnte den Eintrag
-längst haben, ein zweiter Versuch legte dann einen zweiten an. Gerade beim
-Hochladen eines Videos ist das der wahrscheinlichere Fall, deshalb bleibt es
-dort bei der Fehlermeldung.
+längst haben, ein zweiter Versuch legte dann einen zweiten an; dort bleibt es
+bei der Fehlermeldung.
+
+Eine Ausnahme ist das Hochladen der Medien (seit 3.2.0 in Stücken, siehe
+oben): Solange nur Stücke unterwegs sind, existiert der Eintrag nachweislich
+noch nicht. Reißt die Verbindung dabei endgültig ab (`UploadUnterbrochen`,
+nach fünf Anläufen je Anfrage), wandert der Eintrag deshalb ebenfalls in die
+Warteschlange und wird später komplett neu hochgeladen.
 
 **Medien wandern mit.** Ein offline erstellter Eintrag behält seine Fotos und
 Videos: Die Dateien werden nach
