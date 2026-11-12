@@ -695,6 +695,21 @@ final class ApiClient: NSObject, @unchecked Sendable {
     return eintraege.map { PapierkorbEintrag.fromJson($0) }
   }
 
+  /// Adresse des Vorschaubilds einer Datei im Papierkorb (bei Videos ein
+  /// Standbild) — damit man sieht, was man wiederherstellt oder endgültig
+  /// löscht. Der Server gibt aus dem Papierkorb nur diese verkleinerten
+  /// Bilder heraus, nicht die Dateien selbst.
+  func papierkorbVorschauUrl(kennung: String, datei: String, width: Int = 400) -> String {
+    var komponenten = URLComponents(string: "\((try? apiBase) ?? "")/entries.php")
+    komponenten?.queryItems = [
+      URLQueryItem(name: "papierkorb", value: "vorschau"),
+      URLQueryItem(name: "kennung", value: kennung),
+      URLQueryItem(name: "datei", value: datei),
+      URLQueryItem(name: "w", value: String(width)),
+    ]
+    return komponenten?.url?.absoluteString ?? ""
+  }
+
   /// Holt einen Eintrag samt Medien zurück und liefert seine Kennung.
   ///
   /// `diary` und `vonName` zählen nur bei Medien ohne Eintrag: Sie werden zu

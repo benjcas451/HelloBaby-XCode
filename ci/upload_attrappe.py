@@ -204,6 +204,7 @@ class Anfrage(BaseHTTPRequestHandler):
                     "kennung": ablage["kennung"], "diary": diary, "diary_vorschlag": diary,
                     "geloescht": "2026-11-12 12:00:00", "verfaellt": "2026-12-12", "tage_uebrig": 30,
                     "wiederherstellbar": diary is not None, "medien": len(uploads),
+                    "dateien": [u["name"] for u in uploads],
                     "bytes": sum(u["size"] for u in uploads),
                     "eintrag": dict(felder, id=eintrag["id"], bilder="uploads/x" if uploads else "",
                                     favorit=0, created_at="2026-11-12 11:00:00")})

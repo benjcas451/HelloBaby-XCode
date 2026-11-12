@@ -134,6 +134,16 @@ struct PapierkorbView: View {
       if eintrag.medien > 0 {
         Text(eintrag.medienText).font(.subheadline)
       }
+      // Vorschaubilder: zeigen, was wiederhergestellt oder gelöscht wird.
+      if !eintrag.dateien.isEmpty {
+        ScrollView(.horizontal, showsIndicators: false) {
+          HStack(spacing: 8) {
+            ForEach(eintrag.dateien, id: \.self) { datei in
+              vorschau(eintrag, datei)
+            }
+          }
+        }
+      }
       Text(eintrag.fristText)
         .font(.caption)
         .foregroundStyle(.secondary)
@@ -171,6 +181,29 @@ struct PapierkorbView: View {
     .padding(14)
     .frame(maxWidth: .infinity, alignment: .leading)
     .hbKarte()
+  }
+
+  /// Vorschaubild einer Datei; bei Videos das Standbild mit Abspiel-Zeichen.
+  private func vorschau(_ eintrag: PapierkorbEintrag, _ datei: String) -> some View {
+    MedienBild(url: api.papierkorbVorschauUrl(kennung: eintrag.kennung, datei: datei)) { bild in
+      bild.resizable().scaledToFill()
+    } platzhalter: {
+      ProgressView()
+    } fehler: {
+      Image(systemName: "photo").foregroundStyle(.secondary)
+    }
+    .frame(width: 96, height: 96)
+    .background(Color.secondary.opacity(0.15))
+    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+    .overlay {
+      if isVideoFile(datei) {
+        Image(systemName: "play.circle.fill")
+          .font(.title)
+          .foregroundStyle(.white)
+          .shadow(radius: 2)
+      }
+    }
+    .accessibilityLabel(isVideoFile(datei) ? "Standbild des Videos" : "Foto")
   }
 
   private func laden() async {

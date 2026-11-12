@@ -110,6 +110,10 @@ nichts auf) für beide Tagebücher zugleich, mit „Wiederherstellen“ und
   Eintrag ohne Text wiederherstellen: Die App fragt nach dem Tagebuch
   (`diary_vorschlag` des Servers steht zuerst) und schickt `diary` und
   `von_name` mit. Nur ein leerer Ordner ist nicht wiederherstellbar.
+- **Vorschaubilder:** Jede Karte zeigt die Fotos und Videos des Eintrags
+  (`dateien` der Liste, bei Videos ein Standbild), geladen über
+  `GET entries.php?papierkorb=vorschau&kennung=…&datei=…&w=…`. Der Server
+  gibt aus dem Papierkorb nur diese verkleinerten Bilder heraus.
 - Bewusst ohne Zwischenspeicher und Warteschlange: Der Papierkorb zeigt den
   Stand des Servers, und beide Aktionen werden nicht später still nachgeholt.
 - Ein Server ohne Papierkorb antwortet auf `?papierkorb=liste` mit `400` ohne

@@ -141,6 +141,8 @@ struct PapierkorbEintrag: Identifiable, Hashable {
   let wiederherstellbar: Bool
   /// Anzahl der Fotos und Videos.
   let medien: Int
+  /// Dateinamen der Fotos und Videos, für die Vorschaubilder.
+  let dateien: [String]
   /// Belegter Speicher samt Originalen und Vorschaubildern.
   let bytes: Int64
   let eintrag: Entry
@@ -160,6 +162,7 @@ struct PapierkorbEintrag: Identifiable, Hashable {
       tageUebrig: (json["tage_uebrig"] as? NSNumber)?.intValue ?? 0,
       wiederherstellbar: (json["wiederherstellbar"] as? Bool) ?? false,
       medien: (json["medien"] as? NSNumber)?.intValue ?? 0,
+      dateien: (json["dateien"] as? [Any])?.compactMap { $0 as? String } ?? [],
       bytes: (json["bytes"] as? NSNumber)?.int64Value ?? 0,
       eintrag: Entry.fromJson((json["eintrag"] as? [String: Any]) ?? [:], diary: diary))
   }
