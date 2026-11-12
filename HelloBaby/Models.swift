@@ -123,13 +123,16 @@ struct Entry: Identifiable, Hashable {
 /// Ein gelöschter Eintrag im Papierkorb des Servers.
 ///
 /// Der Server legt beim Löschen die Zeile samt Medien für einige Tage beiseite
-/// (`entries.php?papierkorb=liste`). Zeigt nichts auf einen Eintrag mehr —
-/// Medienordner, die schon vor dem Papierkorb verwaist waren —, ist `diary`
-/// leer und der Eintrag nicht `wiederherstellbar`.
+/// (`entries.php?papierkorb=liste`). Bei Medien ohne Eintrag — Ordnern, deren
+/// Text schon verloren war, bevor es den Papierkorb gab — ist `diary` leer.
+/// Sie lassen sich als Eintrag ohne Text wiederherstellen; `diaryVorschlag`
+/// nennt das Tagebuch, das zu ihrem Tag am ehesten passt.
 struct PapierkorbEintrag: Identifiable, Hashable {
   /// Kennung im Papierkorb; damit wird wiederhergestellt oder gelöscht.
   let kennung: String
   let diary: String
+  /// Tagebuch, in das der Server ohne weitere Angabe wiederherstellt.
+  let diaryVorschlag: String
   /// Zeitpunkt des Löschens, `yyyy-MM-dd HH:mm:ss` (Serverzeit).
   let geloescht: String
   /// Tag, an dem der Server den Eintrag endgültig entfernt.
@@ -150,6 +153,8 @@ struct PapierkorbEintrag: Identifiable, Hashable {
     return PapierkorbEintrag(
       kennung: (json["kennung"] as? String) ?? "",
       diary: diary,
+      // Ältere Server nennen keinen Vorschlag.
+      diaryVorschlag: (json["diary_vorschlag"] as? String) ?? diary,
       geloescht: (json["geloescht"] as? String) ?? "",
       verfaellt: (json["verfaellt"] as? String) ?? "",
       tageUebrig: (json["tage_uebrig"] as? NSNumber)?.intValue ?? 0,

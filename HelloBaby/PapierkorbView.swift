@@ -14,6 +14,8 @@ struct PapierkorbView: View {
   /// Kennung des Eintrags, an dem gerade etwas läuft: sperrt die Knöpfe.
   @State private var inArbeit: String?
   @State private var endgueltig: PapierkorbEintrag?
+  /// Medien ohne Eintrag, für die gerade das Tagebuch gewählt wird.
+  @State private var tagebuchWahl: PapierkorbEintrag?
 
   private let api = ApiClient.shared
 
@@ -75,6 +77,33 @@ struct PapierkorbView: View {
     } message: {
       Text("Der Eintrag wird samt Medien entfernt. Das lässt sich nicht rückgängig machen.")
     }
+    .confirmationDialog(
+      "In welches Tagebuch?",
+      isPresented: .init(get: { tagebuchWahl != nil }, set: { if !$0 { tagebuchWahl = nil } }),
+      titleVisibility: .visible
+    ) {
+      // Der Vorschlag des Servers zuerst.
+      ForEach(tagebuchAuswahl, id: \.id) { diary in
+        Button(diary.id == tagebuchWahl?.diaryVorschlag ? "\(diary.label) (Vorschlag)" : diary.label) {
+          guard let eintrag = tagebuchWahl else { return }
+          ausfuehren(eintrag, erfolg: "Die Medien wurden als Eintrag ohne Text wiederhergestellt.") {
+            _ = try await api.papierkorbWiederherstellen(
+              kennung: eintrag.kennung, diary: diary.id, vonName: AppSettings.selectedUser)
+          }
+        }
+      }
+      Button("Abbrechen", role: .cancel) {}
+    } message: {
+      Text("Zu diesen Medien gibt es keinen Text mehr. Es entsteht ein Eintrag ohne Text.")
+    }
+  }
+
+  /// Beide Tagebücher, das vorgeschlagene zuerst.
+  private var tagebuchAuswahl: [Diary] {
+    let vorschlag = tagebuchWahl?.diaryVorschlag
+    return kDiaries.values.sorted {
+      ($0.id == vorschlag ? 0 : 1, $0.label) < ($1.id == vorschlag ? 0 : 1, $1.label)
+    }
   }
 
   private func karte(_ eintrag: PapierkorbEintrag) -> some View {
@@ -97,7 +126,7 @@ struct PapierkorbView: View {
           }
         }
       } else {
-        Text("Zu diesen Dateien gab es keinen Eintrag mehr; sie lassen sich nicht wiederherstellen.")
+        Text(eintrag.ohneEintragText)
           .font(.subheadline)
       }
       if eintrag.medien > 0 {
@@ -110,8 +139,14 @@ struct PapierkorbView: View {
       HStack(spacing: 10) {
         if eintrag.wiederherstellbar {
           Button {
-            ausfuehren(eintrag, erfolg: "Der Eintrag wurde wiederhergestellt.") {
-              _ = try await api.papierkorbWiederherstellen(kennung: eintrag.kennung)
+            if eintrag.diary.isEmpty {
+              // Ohne Eintrag weiß niemand mehr, in welchem Tagebuch die
+              // Medien standen.
+              tagebuchWahl = eintrag
+            } else {
+              ausfuehren(eintrag, erfolg: "Der Eintrag wurde wiederhergestellt.") {
+                _ = try await api.papierkorbWiederherstellen(kennung: eintrag.kennung)
+              }
             }
           } label: {
             Label("Wiederherstellen", systemImage: "arrow.uturn.backward")
@@ -181,6 +216,13 @@ extension PapierkorbEintrag {
       return datum.isEmpty ? "Medien ohne Eintrag" : "Medien ohne Eintrag vom \(datum)"
     }
     return "\(diary.label): Eintrag vom \(datum)"
+  }
+
+  /// Hinweis auf Karten ohne Eintrag: was Wiederherstellen dort bedeutet.
+  var ohneEintragText: String {
+    wiederherstellbar
+      ? "Zu diesen Medien gibt es keinen Text mehr. Wiederherstellen legt einen Eintrag ohne Text an."
+      : "Der Ordner ist leer; hier gibt es nichts wiederherzustellen."
   }
 
   var medienText: String {

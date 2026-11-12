@@ -696,9 +696,17 @@ final class ApiClient: NSObject, @unchecked Sendable {
   }
 
   /// Holt einen Eintrag samt Medien zurück und liefert seine Kennung.
+  ///
+  /// `diary` und `vonName` zählen nur bei Medien ohne Eintrag: Sie werden zu
+  /// einem Eintrag ohne Text in diesem Tagebuch und mit diesem Ersteller.
   @discardableResult
-  func papierkorbWiederherstellen(kennung: String) async throws -> Int {
-    let antwort = try await papierkorbAktion("wiederherstellen", kennung: kennung)
+  func papierkorbWiederherstellen(
+    kennung: String, diary: String? = nil, vonName: String = ""
+  ) async throws -> Int {
+    var felder: [(String, String)] = []
+    if let diary { felder.append(("diary", diary)) }
+    if !vonName.isEmpty { felder.append(("von_name", vonName)) }
+    let antwort = try await papierkorbAktion("wiederherstellen", kennung: kennung, felder: felder)
     return (antwort.json["id"] as? NSNumber)?.intValue ?? 0
   }
 
@@ -707,9 +715,12 @@ final class ApiClient: NSObject, @unchecked Sendable {
     _ = try await papierkorbAktion("loeschen", kennung: kennung)
   }
 
-  private func papierkorbAktion(_ aktion: String, kennung: String) async throws -> UploadAntwort {
+  private func papierkorbAktion(
+    _ aktion: String, kennung: String, felder: [(String, String)] = []
+  ) async throws -> UploadAntwort {
     let antwort = try await uploadAnfrage(
-      "POST", query: ["papierkorb": aktion], body: Self.formular([("kennung", kennung)]),
+      "POST", query: ["papierkorb": aktion],
+      body: Self.formular([("kennung", kennung)] + felder),
       contentType: "application/x-www-form-urlencoded")
     guard antwort.ok else { throw Self.papierkorbFehler(antwort) }
     return antwort

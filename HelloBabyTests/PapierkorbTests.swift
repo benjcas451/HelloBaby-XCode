@@ -69,6 +69,37 @@ final class PapierkorbTests: AttrappeTestCase {
     XCTAssertEqual((zustand["papierkorb"] as? [Any])?.count, 0)
   }
 
+  func testMedienOhneEintragWerdenAlsEintragOhneTextWiederhergestellt() async throws {
+    try await richteEin("neu")
+    defer { raeumeAuf() }
+    var anlegen = URLRequest(url: try XCTUnwrap(URL(string: "\(Self.attrappe)/neu/altlast")))
+    anlegen.httpMethod = "POST"
+    _ = try await URLSession.shared.data(for: anlegen)
+
+    let korb = try await ApiClient.shared.getPapierkorb()
+    let medien = try XCTUnwrap(korb.first)
+    XCTAssertEqual(medien.diary, "")
+    XCTAssertEqual(medien.diaryVorschlag, "schwangerschaft")
+    XCTAssertTrue(medien.wiederherstellbar)
+    XCTAssertEqual(medien.titel, "Medien ohne Eintrag vom 27.07.2025")
+    XCTAssertEqual(
+      medien.ohneEintragText,
+      "Zu diesen Medien gibt es keinen Text mehr. Wiederherstellen legt einen Eintrag ohne Text an.")
+
+    // Bewusst nicht das vorgeschlagene Tagebuch: die Wahl muss ankommen.
+    let id = try await ApiClient.shared.papierkorbWiederherstellen(
+      kennung: medien.kennung, diary: "entwicklung", vonName: "Céline & Lucas")
+
+    XCTAssertGreaterThan(id, 0)
+    let zustand = try await zustand("neu")
+    let eintraege = try XCTUnwrap(zustand["eintraege"] as? [[String: Any]])
+    XCTAssertEqual(eintraege.count, 1)
+    let felder = try XCTUnwrap(eintraege[0]["felder"] as? [String: String])
+    XCTAssertEqual(felder["diary"], "entwicklung")
+    XCTAssertEqual(felder["von_name"], "Céline & Lucas")
+    XCTAssertEqual((zustand["papierkorb"] as? [Any])?.count, 0)
+  }
+
   func testServerOhnePapierkorbWirdErkannt() async throws {
     try await richteEin("alt")
     defer { raeumeAuf() }
@@ -89,7 +120,8 @@ final class PapierkorbTests: AttrappeTestCase {
         "eintrag":{"id":42,"kalender_datum":"2026-11-03","bilder":"uploads/20261103_101500_abc",
                    "von_name":"Celine","favorit":1,"created_at":"2026-11-03 10:15:00",
                    "gewicht":"5,4","groesse":"","kopfumfang":"0","notiz":"Erstes Lächeln","sonstiges":""}},
-       {"kennung":"20261112_134431_altlast_20250727_134229_68862cc5dc2a1","diary":null,
+       {"kennung":"20261112_134431_altlast_20260816_104400_leer","diary":null,
+        "diary_vorschlag":"entwicklung",
         "geloescht":"2026-11-12 13:44:31","verfaellt":"2026-12-12","tage_uebrig":1,
         "wiederherstellbar":false,"medien":1,"bytes":1677721,
         "eintrag":{"id":0,"kalender_datum":"2025-07-27","bilder":"uploads/20250727_134229_68862cc5dc2a1",
@@ -110,7 +142,12 @@ final class PapierkorbTests: AttrappeTestCase {
       "Gelöscht am 12.11.2026 13:52 · wird am 12.12.2026 endgültig entfernt (noch 30 Tage)")
 
     XCTAssertEqual(ohneEintrag.diary, "")
+    XCTAssertEqual(ohneEintrag.diaryVorschlag, "entwicklung")
     XCTAssertFalse(ohneEintrag.wiederherstellbar)
+    XCTAssertEqual(
+      ohneEintrag.ohneEintragText, "Der Ordner ist leer; hier gibt es nichts wiederherzustellen.")
+    // Ein Server ohne Vorschlag: das Tagebuch des Eintrags gilt.
+    XCTAssertEqual(eintrag.diaryVorschlag, "entwicklung")
     XCTAssertEqual(ohneEintrag.titel, "Medien ohne Eintrag vom 27.07.2025")
     XCTAssertEqual(ohneEintrag.medienText, "1 Foto/Video (1,6 MB)")
     XCTAssertEqual(

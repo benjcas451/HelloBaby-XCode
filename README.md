@@ -105,9 +105,11 @@ nichts auf) für beide Tagebücher zugleich, mit „Wiederherstellen“ und
 
 - Wiederhergestellt wird mit der alten Kennung und am alten Medienpfad, sofern
   beide noch frei sind.
-- Einträge mit `"wiederherstellbar": false` sind Medienordner, zu denen es
-  schon vor dem Papierkorb keinen Eintrag mehr gab; sie lassen sich nur
-  endgültig löschen.
+- **Medien ohne Eintrag** (`"diary": null`) sind Ordner, deren Text schon
+  verloren war, bevor es den Papierkorb gab. Sie lassen sich seit 3.3.1 als
+  Eintrag ohne Text wiederherstellen: Die App fragt nach dem Tagebuch
+  (`diary_vorschlag` des Servers steht zuerst) und schickt `diary` und
+  `von_name` mit. Nur ein leerer Ordner ist nicht wiederherstellbar.
 - Bewusst ohne Zwischenspeicher und Warteschlange: Der Papierkorb zeigt den
   Stand des Servers, und beide Aktionen werden nicht später still nachgeholt.
 - Ein Server ohne Papierkorb antwortet auf `?papierkorb=liste` mit `400` ohne
