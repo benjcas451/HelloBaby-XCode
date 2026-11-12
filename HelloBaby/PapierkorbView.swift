@@ -65,27 +65,29 @@ struct PapierkorbView: View {
     .confirmationDialog(
       "Endgültig löschen?",
       isPresented: .init(get: { endgueltig != nil }, set: { if !$0 { endgueltig = nil } }),
-      titleVisibility: .visible
-    ) {
+      titleVisibility: .visible,
+      // Der Eintrag kommt über `presenting` in die Aktion: Beim Antippen ist
+      // der Zustand unter Umständen schon wieder geleert.
+      presenting: endgueltig
+    ) { eintrag in
       Button("Endgültig löschen", role: .destructive) {
-        guard let eintrag = endgueltig else { return }
         ausfuehren(eintrag, erfolg: "Der Eintrag wurde endgültig gelöscht.") {
           try await api.papierkorbLoeschen(kennung: eintrag.kennung)
         }
       }
       Button("Abbrechen", role: .cancel) {}
-    } message: {
+    } message: { _ in
       Text("Der Eintrag wird samt Medien entfernt. Das lässt sich nicht rückgängig machen.")
     }
     .confirmationDialog(
       "In welches Tagebuch?",
       isPresented: .init(get: { tagebuchWahl != nil }, set: { if !$0 { tagebuchWahl = nil } }),
-      titleVisibility: .visible
-    ) {
+      titleVisibility: .visible,
+      presenting: tagebuchWahl
+    ) { eintrag in
       // Der Vorschlag des Servers zuerst.
-      ForEach(tagebuchAuswahl, id: \.id) { diary in
-        Button(diary.id == tagebuchWahl?.diaryVorschlag ? "\(diary.label) (Vorschlag)" : diary.label) {
-          guard let eintrag = tagebuchWahl else { return }
+      ForEach(tagebuchAuswahl(fuer: eintrag), id: \.id) { diary in
+        Button(diary.id == eintrag.diaryVorschlag ? "\(diary.label) (Vorschlag)" : diary.label) {
           ausfuehren(eintrag, erfolg: "Die Medien wurden als Eintrag ohne Text wiederhergestellt.") {
             _ = try await api.papierkorbWiederherstellen(
               kennung: eintrag.kennung, diary: diary.id, vonName: AppSettings.selectedUser)
@@ -93,14 +95,14 @@ struct PapierkorbView: View {
         }
       }
       Button("Abbrechen", role: .cancel) {}
-    } message: {
+    } message: { _ in
       Text("Zu diesen Medien gibt es keinen Text mehr. Es entsteht ein Eintrag ohne Text.")
     }
   }
 
   /// Beide Tagebücher, das vorgeschlagene zuerst.
-  private var tagebuchAuswahl: [Diary] {
-    let vorschlag = tagebuchWahl?.diaryVorschlag
+  private func tagebuchAuswahl(fuer eintrag: PapierkorbEintrag) -> [Diary] {
+    let vorschlag = eintrag.diaryVorschlag
     return kDiaries.values.sorted {
       ($0.id == vorschlag ? 0 : 1, $0.label) < ($1.id == vorschlag ? 0 : 1, $1.label)
     }
