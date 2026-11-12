@@ -53,7 +53,10 @@ passendem HTTP-Status.
 | `POST /api/entries.php?upload=chunk&id=…&offset=…` | ein Stück als Roh-Body (`application/octet-stream`) |
 | `GET /api/entries.php?upload=status&id=…` | Stand eines Uploads: `received`, `complete`, `bereit` |
 | `POST /api/entries.php` | Eintrag anlegen: Felder je Tagebuch + `kalender_datum`, `von_name`, `diary`, Medien als `uploads[]` (Kennungen der fertigen Uploads) |
-| `DELETE /api/entries.php?id=<id>&diary=<id>` | Eintrag löschen |
+| `DELETE /api/entries.php?id=<id>&diary=<id>` | Eintrag löschen – der Server legt ihn samt Medien 30 Tage in den Papierkorb |
+| `GET /api/entries.php?papierkorb=liste` | Papierkorb: gelöschte Einträge beider Tagebücher |
+| `POST /api/entries.php?papierkorb=wiederherstellen` | Eintrag samt Medien zurückholen (`kennung`) |
+| `POST /api/entries.php?papierkorb=loeschen` | Eintrag endgültig entfernen (`kennung`) |
 | `POST /api/favorite.php` | Favorit umschalten, Body `{"id":…, "diary":"…"}` |
 | `GET /api/gallery.php?folder=uploads/<ordner>` | Dateien einer Galerie |
 
@@ -92,11 +95,31 @@ eine multipart-Anfrage mit `images[]` zurück (`ladeHochKlassisch`). Erkennbar
 ist das an der Antwort auf die erste Anmeldung: `400` ohne das Feld
 `upload_fehler`, das der neue Server jeder Ablehnung mitgibt.
 
+### Papierkorb (seit 3.3.0)
+
+Der Server löscht einen Eintrag nicht sofort: Zeile und Medien liegen 30 Tage
+in einem Papierkorb und verschwinden erst danach endgültig. Die App zeigt ihn
+auf dem Startbildschirm (nur in den Server-Modi – die lokale Ablage hebt
+nichts auf) für beide Tagebücher zugleich, mit „Wiederherstellen“ und
+„Endgültig löschen“.
+
+- Wiederhergestellt wird mit der alten Kennung und am alten Medienpfad, sofern
+  beide noch frei sind.
+- Einträge mit `"wiederherstellbar": false` sind Medienordner, zu denen es
+  schon vor dem Papierkorb keinen Eintrag mehr gab; sie lassen sich nur
+  endgültig löschen.
+- Bewusst ohne Zwischenspeicher und Warteschlange: Der Papierkorb zeigt den
+  Stand des Servers, und beide Aktionen werden nicht später still nachgeholt.
+- Ein Server ohne Papierkorb antwortet auf `?papierkorb=liste` mit `400` ohne
+  das Feld `papierkorb_fehler`; die App meldet dann „Der Server kennt den
+  Papierkorb noch nicht.“
+
 `HelloBabyTests/StueckUploadTests.swift` prüft das Verfahren über den
 `ApiClient` gegen einen nachgestellten Server (`ci/upload_attrappe.py`):
 Inhalt und Reihenfolge der Stücke, Fortsetzen nach verlorener Antwort,
 Rückfall bei einem Server ohne das Verfahren und der Weg in die
-Warteschlange. Der Workflow `tests.yml` lässt das bei jedem Push auf `main`
+Warteschlange. `PapierkorbTests.swift` prüft auf demselben Weg Auflisten,
+Wiederherstellen und endgültiges Löschen. Der Workflow `tests.yml` lässt das bei jedem Push auf `main`
 und `claude/**` im iOS-Simulator laufen. Lokal vorher
 `python3 ci/upload_attrappe.py 18765` starten — ohne ihn werden die Tests
 übersprungen — und für den Testlauf `NSAllowsLocalNetworking` in

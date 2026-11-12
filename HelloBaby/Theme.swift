@@ -15,6 +15,7 @@ enum Hb {
   static let aktionZufall = Color(hex: 0x6FAF53)
   static let aktionFavoriten = Color(hex: 0xDAA520)
   static let aktionGalerie = Color(hex: 0xCB6CA8)
+  static let aktionPapierkorb = Color(hex: 0x7D8590)
 
   // Flächen hell/dunkel wie das Flutter-Theme.
   static let scaffoldHell = Color(hex: 0xF5F7F0)

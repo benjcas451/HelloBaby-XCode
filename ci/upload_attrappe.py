@@ -1,16 +1,20 @@
 #!/usr/bin/env python3
-"""Nachgestellter HelloBaby-Server fuer die Unit-Tests (StueckUploadTests).
+"""Nachgestellter HelloBaby-Server fuer die Unit-Tests (StueckUploadTests,
+PapierkorbTests).
 
 Verhaelt sich an `/<szenario>/api/entries.php` wie der echte Server beim
 Hochladen in Stuecken: Stuecke nur am passenden Offset, sonst 409 mit dem
 echten Stand; Videos sind erst nach einigen Statusabfragen "bereit"; der
-Eintrag ist wiederholbar. Das Szenario im Pfad waehlt die Stoerung:
+Eintrag ist wiederholbar. Loeschen legt einen Eintrag in den Papierkorb
+(?papierkorb=liste|wiederherstellen|loeschen). Das Szenario im Pfad waehlt
+die Stoerung:
 
   neu      alles laeuft glatt
   abriss   die Antwort auf das zweite Stueck und auf das erste Anlegen des
            Eintrags geht verloren (Verbindung wird ohne Antwort geschlossen)
   haengt   Stuecke kommen nie durch
-  alt      Server ohne das Verfahren: kennt nur multipart mit images[]
+  alt      Server ohne Stuecke und ohne Papierkorb: kennt nur multipart mit
+           images[]
 
 Aufruf:  python3 ci/upload_attrappe.py 18765
 Der Zustand laesst sich ueber GET /<szenario>/zustand abfragen und ueber
@@ -32,7 +36,7 @@ szenarien = {}
 
 
 def zustand(name):
-    return szenarien.setdefault(name, {"uploads": {}, "eintraege": [], "abrisse": 0, "abgelehnt": 0})
+    return szenarien.setdefault(name, {"uploads": {}, "eintraege": [], "papierkorb": [], "abrisse": 0, "abgelehnt": 0})
 
 
 class Anfrage(BaseHTTPRequestHandler):
@@ -67,6 +71,9 @@ class Anfrage(BaseHTTPRequestHandler):
     def do_GET(self):
         self.bediene(b"")
 
+    def do_DELETE(self):
+        self.bediene(b"")
+
     def do_POST(self):
         self.bediene(self.rfile.read(int(self.headers.get("Content-Length") or 0)))
 
@@ -95,6 +102,7 @@ class Anfrage(BaseHTTPRequestHandler):
                 for kennung, u in z["uploads"].items()
             ],
             "eintraege": z["eintraege"],
+            "papierkorb": [k["kennung"] for k in z["papierkorb"]],
             "abrisse": z["abrisse"],
             "abgelehnt": z["abgelehnt"],
         }
@@ -103,6 +111,19 @@ class Anfrage(BaseHTTPRequestHandler):
         aktion = query.get("upload")
         if szenario == "alt":
             return self.alter_server(z, aktion, koerper)
+
+        if "papierkorb" in query:
+            return self.papierkorb(z, query["papierkorb"], koerper)
+
+        if self.command == "DELETE":
+            # Wie der Server: Loeschen legt den Eintrag in den Papierkorb.
+            for eintrag in z["eintraege"]:
+                if str(eintrag["id"]) == query.get("id"):
+                    z["eintraege"].remove(eintrag)
+                    z["papierkorb"].insert(0, {
+                        "kennung": "20261112_1200%02d_edata_%d" % (len(z["papierkorb"]), eintrag["id"]),
+                        "eintrag": eintrag})
+            return self.antworte(200, {"success": True})
 
         if aktion == "init" and self.command == "POST":
             felder = {k: v[0] for k, v in parse_qs(koerper.decode()).items()}
@@ -155,6 +176,37 @@ class Anfrage(BaseHTTPRequestHandler):
             return self.antworte(200, {"success": True, "id": eintrag["id"]})
 
         return self.antworte(400, {"error": "Unbekannte Upload-Aktion.", "upload_fehler": True})
+
+    def papierkorb(self, z, aktion, koerper):
+        """Liste, Wiederherstellen und endgueltiges Loeschen wie helpers.php."""
+        if aktion == "liste" and self.command == "GET":
+            eintraege = []
+            for ablage in z["papierkorb"]:
+                eintrag = ablage["eintrag"]
+                felder = dict(eintrag["felder"])
+                diary = felder.pop("diary", None)
+                uploads = [z["uploads"][k] for k in eintrag["uploads"]]
+                eintraege.append({
+                    "kennung": ablage["kennung"], "diary": diary,
+                    "geloescht": "2026-11-12 12:00:00", "verfaellt": "2026-12-12", "tage_uebrig": 30,
+                    "wiederherstellbar": diary is not None, "medien": len(uploads),
+                    "bytes": sum(u["size"] for u in uploads),
+                    "eintrag": dict(felder, id=eintrag["id"], bilder="uploads/x" if uploads else "",
+                                    favorit=0, created_at="2026-11-12 11:00:00")})
+            return self.antworte(200, {"tage": 30, "eintraege": eintraege})
+        if aktion in ("wiederherstellen", "loeschen") and self.command == "POST":
+            kennung = parse_qs(koerper.decode()).get("kennung", [""])[0]
+            ablage = next((a for a in z["papierkorb"] if a["kennung"] == kennung), None)
+            if ablage is None:
+                return self.antworte(404, {"error": "Der Eintrag liegt nicht mehr im Papierkorb.",
+                                           "papierkorb_fehler": True})
+            z["papierkorb"].remove(ablage)
+            if aktion == "loeschen":
+                return self.antworte(200, {"success": True})
+            z["eintraege"].append(ablage["eintrag"])
+            return self.antworte(200, {"success": True, "id": ablage["eintrag"]["id"],
+                                       "diary": ablage["eintrag"]["felder"].get("diary")})
+        return self.antworte(400, {"error": "Unbekannte Papierkorb-Aktion.", "papierkorb_fehler": True})
 
     def alter_server(self, z, aktion, koerper):
         """Stand vor dem Verfahren: jede POST-Anfrage ist ein Eintrag."""

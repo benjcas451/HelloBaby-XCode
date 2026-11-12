@@ -37,6 +37,8 @@ struct DiaryField: Hashable {
 /// Ein Tagebuch (Schwangerschaft oder Entwicklung).
 struct Diary: Hashable {
   let id: String
+  /// Kurzname, etwa für Überschriften im Papierkorb.
+  let label: String
   let title: String
   let fields: [DiaryField]
 }
@@ -45,6 +47,7 @@ struct Diary: Hashable {
 let kDiaries: [String: Diary] = [
   "schwangerschaft": Diary(
     id: "schwangerschaft",
+    label: "Schwangerschaft",
     title: "Schwangerschaftstagebuch",
     fields: [
       DiaryField(key: "gewicht", label: "Gewicht", unit: "kg", numeric: true),
@@ -55,6 +58,7 @@ let kDiaries: [String: Diary] = [
     ]),
   "entwicklung": Diary(
     id: "entwicklung",
+    label: "Entwicklung",
     title: "Entwicklungstagebuch",
     fields: [
       DiaryField(key: "gewicht", label: "Gewicht", unit: "kg", numeric: true),
@@ -113,6 +117,46 @@ struct Entry: Identifiable, Hashable {
     if value == nil || value is NSNull { return "" }
     if let text = value as? String { return text }
     return "\(value!)"
+  }
+}
+
+/// Ein gelöschter Eintrag im Papierkorb des Servers.
+///
+/// Der Server legt beim Löschen die Zeile samt Medien für einige Tage beiseite
+/// (`entries.php?papierkorb=liste`). Zeigt nichts auf einen Eintrag mehr —
+/// Medienordner, die schon vor dem Papierkorb verwaist waren —, ist `diary`
+/// leer und der Eintrag nicht `wiederherstellbar`.
+struct PapierkorbEintrag: Identifiable, Hashable {
+  /// Kennung im Papierkorb; damit wird wiederhergestellt oder gelöscht.
+  let kennung: String
+  let diary: String
+  /// Zeitpunkt des Löschens, `yyyy-MM-dd HH:mm:ss` (Serverzeit).
+  let geloescht: String
+  /// Tag, an dem der Server den Eintrag endgültig entfernt.
+  let verfaellt: String
+  let tageUebrig: Int
+  let wiederherstellbar: Bool
+  /// Anzahl der Fotos und Videos.
+  let medien: Int
+  /// Belegter Speicher samt Originalen und Vorschaubildern.
+  let bytes: Int64
+  let eintrag: Entry
+
+  var id: String { kennung }
+
+  static func fromJson(_ json: [String: Any]) -> PapierkorbEintrag {
+    // Bei Medien ohne Eintrag steht hier ein JSON-null.
+    let diary = (json["diary"] as? String) ?? ""
+    return PapierkorbEintrag(
+      kennung: (json["kennung"] as? String) ?? "",
+      diary: diary,
+      geloescht: (json["geloescht"] as? String) ?? "",
+      verfaellt: (json["verfaellt"] as? String) ?? "",
+      tageUebrig: (json["tage_uebrig"] as? NSNumber)?.intValue ?? 0,
+      wiederherstellbar: (json["wiederherstellbar"] as? Bool) ?? false,
+      medien: (json["medien"] as? NSNumber)?.intValue ?? 0,
+      bytes: (json["bytes"] as? NSNumber)?.int64Value ?? 0,
+      eintrag: Entry.fromJson((json["eintrag"] as? [String: Any]) ?? [:], diary: diary))
   }
 }
 
