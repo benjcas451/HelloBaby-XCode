@@ -87,6 +87,11 @@ class Anfrage(BaseHTTPRequestHandler):
             if teile == ["zuruecksetzen"]:
                 szenarien.clear()
                 return self.antworte(200, {"ok": True})
+            if len(teile) == 2 and teile[1] == "altlast" and self.command == "POST":
+                # Medien ohne Eintrag in den Papierkorb legen (fuer die Tests).
+                zustand(teile[0])["papierkorb"].insert(0, {
+                    "kennung": "20261112_134431_altlast_20250727_134229_abc", "eintrag": None})
+                return self.antworte(200, {"ok": True})
             if len(teile) == 2 and teile[1] == "zustand":
                 return self.antworte(200, self.bericht(zustand(teile[0])))
             if len(teile) == 3 and teile[1:] == ["api", "entries.php"]:
@@ -183,19 +188,30 @@ class Anfrage(BaseHTTPRequestHandler):
             eintraege = []
             for ablage in z["papierkorb"]:
                 eintrag = ablage["eintrag"]
+                if eintrag is None:
+                    # Medien ohne Eintrag: als Eintrag ohne Text wiederherstellbar.
+                    eintraege.append({
+                        "kennung": ablage["kennung"], "diary": None, "diary_vorschlag": "schwangerschaft",
+                        "geloescht": "2026-11-12 13:44:31", "verfaellt": "2026-12-12", "tage_uebrig": 30,
+                        "wiederherstellbar": True, "medien": 1, "bytes": 1677721,
+                        "eintrag": {"id": 0, "kalender_datum": "2025-07-27", "created_at": "2025-07-27 13:42:29",
+                                    "bilder": "uploads/20250727_134229_abc", "von_name": "", "favorit": 0}})
+                    continue
                 felder = dict(eintrag["felder"])
                 diary = felder.pop("diary", None)
                 uploads = [z["uploads"][k] for k in eintrag["uploads"]]
                 eintraege.append({
-                    "kennung": ablage["kennung"], "diary": diary,
+                    "kennung": ablage["kennung"], "diary": diary, "diary_vorschlag": diary,
                     "geloescht": "2026-11-12 12:00:00", "verfaellt": "2026-12-12", "tage_uebrig": 30,
                     "wiederherstellbar": diary is not None, "medien": len(uploads),
+                    "dateien": [u["name"] for u in uploads],
                     "bytes": sum(u["size"] for u in uploads),
                     "eintrag": dict(felder, id=eintrag["id"], bilder="uploads/x" if uploads else "",
                                     favorit=0, created_at="2026-11-12 11:00:00")})
             return self.antworte(200, {"tage": 30, "eintraege": eintraege})
         if aktion in ("wiederherstellen", "loeschen") and self.command == "POST":
-            kennung = parse_qs(koerper.decode()).get("kennung", [""])[0]
+            felder = {k: v[0] for k, v in parse_qs(koerper.decode()).items()}
+            kennung = felder.get("kennung", "")
             ablage = next((a for a in z["papierkorb"] if a["kennung"] == kennung), None)
             if ablage is None:
                 return self.antworte(404, {"error": "Der Eintrag liegt nicht mehr im Papierkorb.",
@@ -203,6 +219,12 @@ class Anfrage(BaseHTTPRequestHandler):
             z["papierkorb"].remove(ablage)
             if aktion == "loeschen":
                 return self.antworte(200, {"success": True})
+            if ablage["eintrag"] is None:
+                # Eintrag ohne Text im gewuenschten (sonst vorgeschlagenen) Tagebuch.
+                ablage["eintrag"] = {
+                    "id": len(z["eintraege"]) + 100, "uploads": [], "anfragen": 1,
+                    "felder": {"diary": felder.get("diary", "schwangerschaft"), "kalender_datum": "2025-07-27",
+                               "von_name": felder.get("von_name", "")}}
             z["eintraege"].append(ablage["eintrag"])
             return self.antworte(200, {"success": True, "id": ablage["eintrag"]["id"],
                                        "diary": ablage["eintrag"]["felder"].get("diary")})

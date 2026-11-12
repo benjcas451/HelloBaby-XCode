@@ -695,10 +695,33 @@ final class ApiClient: NSObject, @unchecked Sendable {
     return eintraege.map { PapierkorbEintrag.fromJson($0) }
   }
 
+  /// Adresse des Vorschaubilds einer Datei im Papierkorb (bei Videos ein
+  /// Standbild) — damit man sieht, was man wiederherstellt oder endgültig
+  /// löscht. Der Server gibt aus dem Papierkorb nur diese verkleinerten
+  /// Bilder heraus, nicht die Dateien selbst.
+  func papierkorbVorschauUrl(kennung: String, datei: String, width: Int = 400) -> String {
+    var komponenten = URLComponents(string: "\((try? apiBase) ?? "")/entries.php")
+    komponenten?.queryItems = [
+      URLQueryItem(name: "papierkorb", value: "vorschau"),
+      URLQueryItem(name: "kennung", value: kennung),
+      URLQueryItem(name: "datei", value: datei),
+      URLQueryItem(name: "w", value: String(width)),
+    ]
+    return komponenten?.url?.absoluteString ?? ""
+  }
+
   /// Holt einen Eintrag samt Medien zurück und liefert seine Kennung.
+  ///
+  /// `diary` und `vonName` zählen nur bei Medien ohne Eintrag: Sie werden zu
+  /// einem Eintrag ohne Text in diesem Tagebuch und mit diesem Ersteller.
   @discardableResult
-  func papierkorbWiederherstellen(kennung: String) async throws -> Int {
-    let antwort = try await papierkorbAktion("wiederherstellen", kennung: kennung)
+  func papierkorbWiederherstellen(
+    kennung: String, diary: String? = nil, vonName: String = ""
+  ) async throws -> Int {
+    var felder: [(String, String)] = []
+    if let diary { felder.append(("diary", diary)) }
+    if !vonName.isEmpty { felder.append(("von_name", vonName)) }
+    let antwort = try await papierkorbAktion("wiederherstellen", kennung: kennung, felder: felder)
     return (antwort.json["id"] as? NSNumber)?.intValue ?? 0
   }
 
@@ -707,9 +730,12 @@ final class ApiClient: NSObject, @unchecked Sendable {
     _ = try await papierkorbAktion("loeschen", kennung: kennung)
   }
 
-  private func papierkorbAktion(_ aktion: String, kennung: String) async throws -> UploadAntwort {
+  private func papierkorbAktion(
+    _ aktion: String, kennung: String, felder: [(String, String)] = []
+  ) async throws -> UploadAntwort {
     let antwort = try await uploadAnfrage(
-      "POST", query: ["papierkorb": aktion], body: Self.formular([("kennung", kennung)]),
+      "POST", query: ["papierkorb": aktion],
+      body: Self.formular([("kennung", kennung)] + felder),
       contentType: "application/x-www-form-urlencoded")
     guard antwort.ok else { throw Self.papierkorbFehler(antwort) }
     return antwort
