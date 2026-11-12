@@ -71,17 +71,32 @@ jobs:
             -scheme HelloBaby \
             -destination "platform=iOS Simulator,id=$SIMULATOR" \
             -only-testing:HelloBabyTests \
+            -parallel-testing-enabled NO \
             -derivedDataPath DerivedData \
+            -resultBundlePath Ergebnis.xcresult \
             2>&1 | tee xcodebuild.log \
-            | grep -E "error:|Test Case .*(passed|failed)|Test Suite .*(passed|failed)|Executed [0-9]+ tests|\*\* TEST|XCTAssert|XCTSkip|skipped" \
+            | grep -iE "error:|Test case .*(passed|failed|skipped)|Test suite|Executed [0-9]+ tests|\*\* TEST|Failing tests" \
             || true
           grep -q "\*\* TEST SUCCEEDED \*\*" xcodebuild.log
           # Übersprungene Tests wären ein stiller Ausfall der Attrappe.
-          if grep -E "Test Case .*StueckUploadTests.* skipped" xcodebuild.log; then
+          if grep -iE "Test case .*StueckUploadTests.* skipped" xcodebuild.log; then
             echo "::error::StueckUploadTests wurden übersprungen"
             exit 1
           fi
-          grep -cE "Test Case .*StueckUploadTests.* passed" xcodebuild.log
+
+      # xcodebuild nennt bei einem Fehlschlag nur den Namen des Tests; die
+      # Meldung der gescheiterten Prüfung steht im Ergebnis-Bundle.
+      - name: Meldungen der gescheiterten Tests
+        if: failure()
+        run: |
+          xcrun xcresulttool get test-results summary --path Ergebnis.xcresult --compact \
+            | python3 -c '
+          import json, sys
+          bericht = json.load(sys.stdin)
+          print(bericht.get("result"), {k: bericht.get(k) for k in ("passedTests", "failedTests", "skippedTests")})
+          for fehler in bericht.get("testFailures", []):
+              print("-", fehler.get("testName"), "::", fehler.get("failureText"))
+          ' || true
 
       - name: Protokoll der Attrappe
         if: always()

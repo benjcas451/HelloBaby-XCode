@@ -133,6 +133,25 @@ final class StueckUploadTests: XCTestCase {
     try await ApiClient.shared.deleteEntry(id: id, diary: "entwicklung")
   }
 
+  func testUnbekannterHostWandertDerEintragSofortInDieWarteschlange() async throws {
+    try await richteEin("neu")
+    defer { raeumeAuf() }
+    // `.invalid` löst nie auf (RFC 2606): die Anfrage geht gar nicht erst hinaus.
+    AppSettings.serverBase = "https://hellobaby.invalid"
+    ApiClient.shared.reset()
+    let foto = try datei("foto.jpg", bytes: 1000)
+
+    let start = Date()
+    let id = try await ApiClient.shared.createEntry(
+      kalenderDatum: "2031-02-03", fields: ["notiz": "offline"], vonName: "Test",
+      images: [foto], diary: "entwicklung")
+    let dauer = Date().timeIntervalSince(start)
+
+    XCTAssertLessThan(id, 0, "vorgemerkte Einträge tragen eine negative Kennung")
+    XCTAssertLessThan(dauer, 15, "kein mehrfacher Anlauf, wenn der Server nicht erreichbar ist")
+    try await ApiClient.shared.deleteEntry(id: id, diary: "entwicklung")
+  }
+
   func testBleibenDieStueckeHaengenWandertDerEintragInDieWarteschlange() async throws {
     try await richteEin("haengt")
     defer { raeumeAuf() }
@@ -154,10 +173,18 @@ final class StueckUploadTests: XCTestCase {
   /// Stellt die App auf die Attrappe ein und leert deren Zustand.
   private func richteEin(_ szenario: String) async throws {
     var probe = URLRequest(url: try XCTUnwrap(URL(string: "\(Self.attrappe)/bereit")))
-    probe.timeoutInterval = 3
-    guard let antwort = try? await URLSession.shared.data(for: probe),
-      (antwort.1 as? HTTPURLResponse)?.statusCode == 200
-    else {
+    probe.timeoutInterval = 10
+    // Mehrere Anläufe: die allererste Verbindung einer frisch gestarteten App
+    // im Simulator braucht mitunter mehrere Sekunden.
+    var erreichbar = false
+    for _ in 0..<3 where !erreichbar {
+      if let antwort = try? await URLSession.shared.data(for: probe),
+        (antwort.1 as? HTTPURLResponse)?.statusCode == 200
+      {
+        erreichbar = true
+      }
+    }
+    guard erreichbar else {
       throw XCTSkip("Attrappe läuft nicht – starten mit: python3 ci/upload_attrappe.py 18765")
     }
     var leeren = URLRequest(url: try XCTUnwrap(URL(string: "\(Self.attrappe)/zuruecksetzen")))
