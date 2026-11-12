@@ -20,6 +20,9 @@ enum Netzfehler: Sendable {
   /// Ordnet einen `URLSession`-Fehler ein; nil bei allem, was kein
   /// Netzwerkproblem ist.
   static func aus(_ fehler: Error) -> Netzfehler? {
+    // Abbruch beim Hochladen der Medien: Der Eintrag selbst war noch gar
+    // nicht unterwegs.
+    if fehler is UploadUnterbrochen { return .nieGesendet }
     guard let urlFehler = fehler as? URLError else { return nil }
     switch urlFehler.code {
     case .notConnectedToInternet, .cannotFindHost, .cannotConnectToHost,
@@ -43,4 +46,17 @@ enum Netzfehler: Sendable {
   static func meldung(_ fehler: Error) -> String {
     (fehler as? URLError)?.localizedDescription ?? fehler.localizedDescription
   }
+}
+
+/// Die Verbindung riss ab, während die Medien eines neuen Eintrags in Stücken
+/// hochgeladen wurden.
+///
+/// Anders als bei einem Abbruch mitten in der Anfrage, die den Eintrag anlegt,
+/// ist hier nichts mehrdeutig: Der Eintrag entsteht erst in einem eigenen
+/// Schritt danach. Ein späterer zweiter Versuch kann deshalb kein Duplikat
+/// erzeugen — halbe Uploads räumt der Server von selbst weg.
+struct UploadUnterbrochen: LocalizedError {
+  let ursache: Error
+
+  var errorDescription: String? { Netzfehler.meldung(ursache) }
 }

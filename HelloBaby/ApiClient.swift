@@ -164,7 +164,65 @@ final class ApiClient: NSObject, @unchecked Sendable {
 
   /// Lädt einen Eintrag samt Medien hoch. Ohne Offline-Logik — so benutzt ihn
   /// auch das Nachholen, das sonst in einer Schleife wieder vormerken würde.
+  ///
+  /// Medien gehen seit 3.2.0 in Stücken voraus (`ladeInStuecken`); der Eintrag
+  /// selbst ist danach eine kleine Anfrage, die nur noch die Kennungen der
+  /// fertigen Uploads nennt. Kennt der Server das Verfahren noch nicht,
+  /// bleibt es bei der einen großen Anfrage von früher.
   private func ladeHoch(
+    kalenderDatum: String, fields: [String: String], vonName: String,
+    images: [URL], diary: String,
+    onSendProgress: (@Sendable (Int64, Int64) -> Void)? = nil
+  ) async throws -> Int {
+    var uploads: [String] = []
+    if !images.isEmpty {
+      guard let kennungen = try await ladeInStuecken(images, onSendProgress: onSendProgress)
+      else {
+        return try await ladeHochKlassisch(
+          kalenderDatum: kalenderDatum, fields: fields, vonName: vonName,
+          images: images, diary: diary, onSendProgress: onSendProgress)
+      }
+      uploads = kennungen
+    }
+
+    var felder: [(String, String)] = [
+      ("diary", diary), ("kalender_datum", kalenderDatum), ("von_name", vonName),
+    ]
+    for (key, value) in fields { felder.append((key, value)) }
+    for kennung in uploads { felder.append(("uploads[]", kennung)) }
+
+    var request = URLRequest(url: try urlFuer(pfad: "entries.php", query: [:]))
+    request.httpMethod = "POST"
+    request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+    request.httpBody = Self.formular(felder)
+    request.timeoutInterval = 120
+    auth(&request)
+    let anfrage = request
+
+    let data: Data
+    let response: URLResponse
+    if uploads.isEmpty {
+      (data, response) = try await aktuelleSession().data(for: anfrage)
+    } else {
+      // Mit Uploads ist die Anfrage wiederholbar: Der Server merkt sich, in
+      // welchen Eintrag sie eingegangen sind, und liefert bei einem zweiten
+      // Versuch denselben zurück statt einen weiteren anzulegen.
+      (data, response) = try await mitWiederholung {
+        try await self.aktuelleSession().data(for: anfrage)
+      }
+    }
+    let json = try Self.pruefen(data: data, response: response)
+    guard let objekt = json as? [String: Any] else {
+      throw ServiceError(message: "Unerwartete Antwort beim Erstellen.")
+    }
+    OfflineStatus.shared.melde(grund: nil)
+    return objekt["id"] as? Int ?? Int("\(objekt["id"] ?? "")") ?? 0
+  }
+
+  /// Der Weg vor 3.2.0: Eintrag und alle Medien in einer einzigen
+  /// multipart-Anfrage. Bleibt für Server, die das Hochladen in Stücken noch
+  /// nicht kennen — hinter Cloudflare scheitert er ab 100 MB.
+  private func ladeHochKlassisch(
     kalenderDatum: String, fields: [String: String], vonName: String,
     images: [URL], diary: String,
     onSendProgress: (@Sendable (Int64, Int64) -> Void)? = nil
@@ -230,6 +288,307 @@ final class ApiClient: NSObject, @unchecked Sendable {
     }
     OfflineStatus.shared.melde(grund: nil)
     return objekt["id"] as? Int ?? Int("\(objekt["id"] ?? "")") ?? 0
+  }
+
+  // MARK: - Hochladen in Stücken
+
+  /// Stückgröße, falls der Server keine nennt.
+  private static let stueckStandard: Int64 = 8 * 1024 * 1024
+  private static let stueckMin: Int64 = 256 * 1024
+  /// Obergrenze des Servers je Stück; weit unter Cloudflares 100 MB.
+  private static let stueckMax: Int64 = 64 * 1024 * 1024
+  /// Versuche je Anfrage, bevor ein Verbindungsfehler durchschlägt.
+  private static let versuche = 5
+  private static let verarbeitungMaxSekunden: TimeInterval = 120 * 60
+  /// Was der Server als Video umwandelt (wie `upload_chunks.php`).
+  private static let videoEndungen: Set<String> = ["mov", "mp4", "m4v", "webm"]
+
+  /// Antwort auf einen Upload-Schritt: Status und JSON, noch unbewertet —
+  /// auch aus einem 409 liest die App noch den Stand heraus.
+  private struct UploadAntwort {
+    let status: Int
+    let json: [String: Any]
+    let data: Data
+
+    var ok: Bool { (200..<300).contains(status) }
+
+    func zahl(_ feld: String) -> Int64? {
+      (json[feld] as? NSNumber)?.int64Value
+    }
+  }
+
+  /// Lädt die Medien einzeln und in Stücken hoch und liefert ihre
+  /// Upload-Kennungen in der Reihenfolge der Auswahl — oder nil, wenn der
+  /// Server das Verfahren nicht kennt.
+  ///
+  /// Warum Stücke: Vor dem Server steht meist Cloudflare, das jede Anfrage auf
+  /// 100 MB begrenzt und nach 100 Sekunden ohne Antwort abbricht. Ein längeres
+  /// Video passt weder in eine Anfrage, noch darf seine Umwandlung in der
+  /// Anfrage laufen, die den Eintrag anlegt. Deshalb drei Schritte am
+  /// Endpunkt `entries.php`:
+  ///
+  /// 1. `?upload=init` meldet die Datei an und liefert Kennung und Stückgröße,
+  /// 2. `?upload=chunk&id=…&offset=…` nimmt die Stücke der Reihe nach entgegen,
+  /// 3. `?upload=status&id=…` sagt, wann ein Video fertig umgewandelt ist.
+  ///
+  /// Bis hierhin existiert der Eintrag nachweislich nicht. Ein
+  /// Verbindungsabbruch wird deshalb als `UploadUnterbrochen` gemeldet — das
+  /// darf in die Warteschlange, ohne ein Duplikat zu riskieren.
+  private func ladeInStuecken(
+    _ images: [URL], onSendProgress: (@Sendable (Int64, Int64) -> Void)?
+  ) async throws -> [String]? {
+    var groessen: [Int64] = []
+    for url in images {
+      guard let groesse = try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize else {
+        throw ServiceError(message: "Medien konnten nicht gelesen werden: \(url.lastPathComponent)")
+      }
+      groessen.append(Int64(groesse))
+    }
+    let gesamt = groessen.reduce(0, +)
+
+    do {
+      var erledigt: Int64 = 0
+      var kennungen: [String] = []
+      var videos: [String] = []
+      for (index, url) in images.enumerated() {
+        let groesse = groessen[index]
+        guard
+          let sitzung = try await meldeAn(
+            name: url.lastPathComponent, groesse: groesse, erste: index == 0)
+        else { return nil }
+        let basis = erledigt
+        try await sendeStuecke(
+          datei: url, kennung: sitzung.kennung, groesse: groesse, stueck: sitzung.stueck
+        ) { stand in
+          onSendProgress?(basis + stand, gesamt)
+        }
+        erledigt += groesse
+        kennungen.append(sitzung.kennung)
+        if Self.videoEndungen.contains(url.pathExtension.lowercased()) {
+          videos.append(sitzung.kennung)
+        }
+      }
+      // Ab hier zeigt die Oberfläche „Medien werden verarbeitet…“.
+      onSendProgress?(gesamt, gesamt)
+      for kennung in videos {
+        try await warteAufVerarbeitung(kennung)
+      }
+      return kennungen
+    } catch {
+      guard Netzfehler.aus(error) != nil else { throw error }
+      throw UploadUnterbrochen(ursache: error)
+    }
+  }
+
+  /// Meldet eine Datei an. Liefert nil, wenn der Server das Verfahren nicht
+  /// kennt: Ein älterer Stand hält die Anfrage für einen Eintrag ohne
+  /// Pflichtfelder und antwortet mit 400 — ohne das Kennzeichen
+  /// `upload_fehler`, das der neue Server jeder Ablehnung mitgibt.
+  ///
+  /// Die erste Anmeldung wird bei einem Verbindungsfehler nicht wiederholt:
+  /// Ist das Gerät schlicht offline, soll der Eintrag sofort in die
+  /// Warteschlange und nicht erst nach mehreren Anläufen.
+  private func meldeAn(name: String, groesse: Int64, erste: Bool) async throws
+    -> (kennung: String, stueck: Int64)?
+  {
+    let body = Self.formular([("name", name), ("size", String(groesse))])
+    let antwort: UploadAntwort
+    if erste {
+      antwort = try await uploadAnfrage(
+        "POST", query: ["upload": "init"], body: body,
+        contentType: "application/x-www-form-urlencoded")
+    } else {
+      antwort = try await mitWiederholung {
+        try await self.uploadAnfrage(
+          "POST", query: ["upload": "init"], body: body,
+          contentType: "application/x-www-form-urlencoded")
+      }
+    }
+    if antwort.ok, let kennung = antwort.json["upload_id"] as? String, !kennung.isEmpty {
+      let stueck = min(
+        max(antwort.zahl("chunk_size") ?? Self.stueckStandard, Self.stueckMin), Self.stueckMax)
+      return (kennung, stueck)
+    }
+    let unbekannt =
+      [400, 404, 405].contains(antwort.status)
+      && (antwort.json["upload_fehler"] as? Bool) != true
+    if unbekannt && erste { return nil }
+    throw Self.uploadFehler(antwort)
+  }
+
+  /// Sendet die Stücke einer Datei. Nach einem Verbindungsabbruch geht es an
+  /// der Stelle weiter, die der Server zuletzt bestätigt hat — nicht von vorn.
+  private func sendeStuecke(
+    datei: URL, kennung: String, groesse: Int64, stueck: Int64,
+    melde: @escaping @Sendable (Int64) -> Void
+  ) async throws {
+    let quelle: FileHandle
+    do {
+      quelle = try FileHandle(forReadingFrom: datei)
+    } catch {
+      throw ServiceError(
+        message: "Medien konnten nicht gelesen werden: \(error.localizedDescription)")
+    }
+    defer { try? quelle.close() }
+
+    var stand: Int64 = 0
+    var fehlversuche = 0
+    while stand < groesse {
+      let von = stand
+      let daten = try Self.lies(quelle, ab: von, laenge: Int(min(stueck, groesse - von)))
+      do {
+        let antwort = try await uploadAnfrage(
+          "POST", query: ["upload": "chunk", "id": kennung, "offset": String(von)],
+          body: daten, contentType: "application/octet-stream",
+          fortschritt: { gesendet in melde(von + gesendet) })
+        let bestaetigt = antwort.zahl("received")
+        if antwort.ok, let bestaetigt, bestaetigt > von {
+          stand = bestaetigt
+        } else if antwort.status == 409, let bestaetigt, bestaetigt != von {
+          // Der Server ist schon weiter, weil die Antwort auf ein Stück
+          // verloren ging — dort weitermachen.
+          stand = bestaetigt
+        } else {
+          throw Self.uploadFehler(antwort)
+        }
+        fehlversuche = 0
+      } catch {
+        guard Netzfehler.aus(error) != nil else { throw error }
+        fehlversuche += 1
+        if fehlversuche >= Self.versuche { throw error }
+        try await Task.sleep(nanoseconds: UInt64(fehlversuche) * 2_000_000_000)
+        // Ob das Stück noch ankam, weiß nur der Server.
+        do {
+          stand = try await uploadStatus(kennung).zahl("received") ?? von
+        } catch {
+          guard Netzfehler.aus(error) != nil else { throw error }
+          stand = von
+        }
+      }
+      melde(stand)
+    }
+  }
+
+  /// Liest genau `laenge` Bytes ab `ab` — ein einzelner Lesezugriff darf
+  /// weniger liefern, als verlangt war.
+  private static func lies(_ quelle: FileHandle, ab: Int64, laenge: Int) throws -> Data {
+    var daten = Data(capacity: laenge)
+    do {
+      try quelle.seek(toOffset: UInt64(ab))
+      while daten.count < laenge {
+        guard let block = try quelle.read(upToCount: laenge - daten.count), !block.isEmpty
+        else { break }
+        daten.append(block)
+      }
+    } catch {
+      throw ServiceError(
+        message: "Medien konnten nicht gelesen werden: \(error.localizedDescription)")
+    }
+    guard daten.count == laenge else {
+      throw ServiceError(message: "Die Datei ist kürzer als erwartet.")
+    }
+    return daten
+  }
+
+  /// Wartet, bis der Server ein Video umgewandelt hat. Das läuft dort nach
+  /// dem letzten Stück im Hintergrund weiter — bei langen Videos dauert es
+  /// länger, als eine einzelne Anfrage offen bleiben darf.
+  private func warteAufVerarbeitung(_ kennung: String) async throws {
+    let ende = Date().addingTimeInterval(Self.verarbeitungMaxSekunden)
+    while true {
+      let stand = try await mitWiederholung { try await self.uploadStatus(kennung) }
+      if (stand.json["bereit"] as? Bool) == true { return }
+      if Date() > ende {
+        throw ServiceError(
+          message: "Der Server braucht ungewöhnlich lange für die Umwandlung des Videos.")
+      }
+      try await Task.sleep(nanoseconds: 2_000_000_000)
+    }
+  }
+
+  private func uploadStatus(_ kennung: String) async throws -> UploadAntwort {
+    let antwort = try await uploadAnfrage("GET", query: ["upload": "status", "id": kennung])
+    guard antwort.ok else { throw Self.uploadFehler(antwort) }
+    return antwort
+  }
+
+  /// Eine Anfrage an die Upload-Schritte von `entries.php`. Wirft nur bei
+  /// Verbindungsproblemen und einer Abweisung durch Cloudflare Access; eine
+  /// Fehlerantwort des Servers bewertet der Aufrufer.
+  private func uploadAnfrage(
+    _ methode: String, query: [String: String], body: Data? = nil,
+    contentType: String? = nil, fortschritt: (@Sendable (Int64) -> Void)? = nil
+  ) async throws -> UploadAntwort {
+    var request = URLRequest(url: try urlFuer(pfad: "entries.php", query: query))
+    request.httpMethod = methode
+    if let contentType {
+      request.setValue(contentType, forHTTPHeaderField: "Content-Type")
+    }
+    // Der Session-Timeout (30 s) zählt die Pause zwischen EMPFANGENEN Daten —
+    // während ein Stück über eine langsame Leitung hinausgeht, kommt nichts an.
+    request.timeoutInterval = body == nil ? 30 : 300
+    auth(&request)
+
+    let data: Data
+    let response: URLResponse
+    if let body {
+      // Der Delegate meldet (gesendet, erwartet) je Anfrage; hier zählt nur,
+      // wie viel vom aktuellen Stück draußen ist.
+      let handler: (@Sendable (Int64, Int64) -> Void)?
+      if let fortschritt {
+        handler = { gesendet, _ in fortschritt(gesendet) }
+      } else {
+        handler = nil
+      }
+      lock.withLock { progressHandler = handler }
+      defer { lock.withLock { progressHandler = nil } }
+      (data, response) = try await aktuelleSession().upload(for: request, from: body)
+    } else {
+      (data, response) = try await aktuelleSession().data(for: request)
+    }
+
+    guard let http = response as? HTTPURLResponse else {
+      throw ServiceError(message: "Unerwartete Antwort des Servers.")
+    }
+    if let hinweis = CloudflareServiceToken.abweisung(http) {
+      throw ServiceError(message: hinweis, statusCode: http.statusCode)
+    }
+    let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] ?? [:]
+    return UploadAntwort(status: http.statusCode, json: json, data: data)
+  }
+
+  private static func uploadFehler(_ antwort: UploadAntwort) -> ServiceError {
+    if antwort.ok { return ServiceError(message: "Unerwartete Antwort des Servers.") }
+    return ServiceError(
+      message: "Fehler \(antwort.status): \(meldung(aus: antwort.data))",
+      statusCode: antwort.status)
+  }
+
+  /// Wiederholt einen Aufruf bei Verbindungsproblemen mit wachsender Pause.
+  /// Nur für Anfragen, die der Server beliebig oft verträgt.
+  private func mitWiederholung<T>(_ aufruf: () async throws -> T) async throws -> T {
+    var versuch = 1
+    while true {
+      do {
+        return try await aufruf()
+      } catch {
+        guard Netzfehler.aus(error) != nil, versuch < Self.versuche else { throw error }
+        try await Task.sleep(nanoseconds: UInt64(versuch) * 2_000_000_000)
+        versuch += 1
+      }
+    }
+  }
+
+  /// Kodiert Formularfelder als `application/x-www-form-urlencoded`.
+  private static func formular(_ felder: [(String, String)]) -> Data {
+    let erlaubt = CharacterSet(
+      charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
+    let paare = felder.map { feld -> String in
+      let name = feld.0.addingPercentEncoding(withAllowedCharacters: erlaubt) ?? feld.0
+      let wert = feld.1.addingPercentEncoding(withAllowedCharacters: erlaubt) ?? feld.1
+      return "\(name)=\(wert)"
+    }
+    return Data(paare.joined(separator: "&").utf8)
   }
 
   /// Merkt einen Eintrag samt seiner Medien für später vor und liefert die
