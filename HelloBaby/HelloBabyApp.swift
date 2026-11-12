@@ -10,6 +10,7 @@ enum Ziel: Hashable {
   case gallery(folder: String)
   case video(url: String)
   case settings
+  case trash
 }
 
 @main
@@ -65,6 +66,8 @@ struct HelloBabyApp: App {
               VideoPlayerView(quelle: url)
             case .settings:
               SettingsView()
+            case .trash:
+              PapierkorbView()
             }
           }
       }

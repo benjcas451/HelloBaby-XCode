@@ -107,7 +107,11 @@ struct EntryCard: View {
       Button("Löschen", role: .destructive) { loeschen() }
       Button("Abbrechen", role: .cancel) {}
     } message: {
-      Text("Der Eintrag und seine Medien werden dauerhaft entfernt.")
+      // Der Server hebt Gelöschtes auf, die lokale Ablage nicht.
+      Text(
+        api.hatPapierkorb
+          ? "Der Eintrag wandert samt Medien in den Papierkorb und lässt sich dort 30 Tage lang wiederherstellen."
+          : "Der Eintrag und seine Medien werden dauerhaft entfernt.")
     }
   }
 

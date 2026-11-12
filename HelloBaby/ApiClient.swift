@@ -512,9 +512,9 @@ final class ApiClient: NSObject, @unchecked Sendable {
     return antwort
   }
 
-  /// Eine Anfrage an die Upload-Schritte von `entries.php`. Wirft nur bei
-  /// Verbindungsproblemen und einer Abweisung durch Cloudflare Access; eine
-  /// Fehlerantwort des Servers bewertet der Aufrufer.
+  /// Eine Anfrage an `entries.php`, deren Antwort der Aufrufer selbst bewertet
+  /// – für die Upload-Schritte und den Papierkorb. Wirft nur bei
+  /// Verbindungsproblemen und einer Abweisung durch Cloudflare Access.
   private func uploadAnfrage(
     _ methode: String, query: [String: String], body: Data? = nil,
     contentType: String? = nil, fortschritt: (@Sendable (Int64) -> Void)? = nil
@@ -674,6 +674,56 @@ final class ApiClient: NSObject, @unchecked Sendable {
     let (data, response) = try await aktuelleSession().data(for: request)
     let json = try Self.pruefen(data: data, response: response)
     return ((json as? [String: Any])?["favorit"] as? Int) ?? 0
+  }
+
+  // MARK: - Papierkorb
+
+  /// Ob es einen Papierkorb gibt. Nur der Server hebt Gelöschtes auf; im
+  /// lokalen Modus ist ein gelöschter Eintrag sofort weg.
+  var hatPapierkorb: Bool { !isLocal }
+
+  /// Die gelöschten Einträge beider Tagebücher, zuletzt Gelöschtes zuerst.
+  ///
+  /// Bewusst ohne Zwischenspeicher und Warteschlange: Der Papierkorb soll den
+  /// Stand des Servers zeigen, und Wiederherstellen wie endgültiges Löschen
+  /// sind Entscheidungen, die nicht später still nachgeholt werden.
+  func getPapierkorb() async throws -> [PapierkorbEintrag] {
+    let antwort = try await uploadAnfrage("GET", query: ["papierkorb": "liste"])
+    guard antwort.ok, let eintraege = antwort.json["eintraege"] as? [[String: Any]] else {
+      throw Self.papierkorbFehler(antwort)
+    }
+    return eintraege.map { PapierkorbEintrag.fromJson($0) }
+  }
+
+  /// Holt einen Eintrag samt Medien zurück und liefert seine Kennung.
+  @discardableResult
+  func papierkorbWiederherstellen(kennung: String) async throws -> Int {
+    let antwort = try await papierkorbAktion("wiederherstellen", kennung: kennung)
+    return (antwort.json["id"] as? NSNumber)?.intValue ?? 0
+  }
+
+  /// Entfernt einen Eintrag samt Medien endgültig.
+  func papierkorbLoeschen(kennung: String) async throws {
+    _ = try await papierkorbAktion("loeschen", kennung: kennung)
+  }
+
+  private func papierkorbAktion(_ aktion: String, kennung: String) async throws -> UploadAntwort {
+    let antwort = try await uploadAnfrage(
+      "POST", query: ["papierkorb": aktion], body: Self.formular([("kennung", kennung)]),
+      contentType: "application/x-www-form-urlencoded")
+    guard antwort.ok else { throw Self.papierkorbFehler(antwort) }
+    return antwort
+  }
+
+  /// Ein Server ohne Papierkorb hält die Anfrage für eine gewöhnliche Abfrage
+  /// ohne Filter und antwortet mit 400 — ohne das Kennzeichen
+  /// `papierkorb_fehler`, das der neue Server jeder Ablehnung mitgibt.
+  private static func papierkorbFehler(_ antwort: UploadAntwort) -> ServiceError {
+    if antwort.ok || (antwort.json["papierkorb_fehler"] as? Bool) != true {
+      return ServiceError(
+        message: "Der Server kennt den Papierkorb noch nicht.", statusCode: antwort.status)
+    }
+    return uploadFehler(antwort)
   }
 
   // MARK: - Warteschlange

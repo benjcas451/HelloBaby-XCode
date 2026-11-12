@@ -64,6 +64,12 @@ struct HomeView: View {
           aktion("Galerie", symbol: "photo.on.rectangle", farbe: Hb.aktionGalerie) {
             pfad.append(.imageFeed)
           }
+          // Nur der Server hebt Gelöschtes auf.
+          if api.hatPapierkorb {
+            aktion("Papierkorb", symbol: "trash", farbe: Hb.aktionPapierkorb) {
+              pfad.append(.trash)
+            }
+          }
         }
       }
       .padding()
