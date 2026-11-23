@@ -117,8 +117,9 @@ struct MhHauptButtonStil: ButtonStyle {
         RoundedRectangle(cornerRadius: Mh.radiusMd, style: .continuous)
           .fill(aktiv ? (configuration.isPressed ? Mh.primaryHover : Mh.primary) : Mh.surfaceSubtle)
       )
-      .contentShape(Rectangle())
+      // Tippfläche = mindestens 44 pt, auch bei kleinen Buttons (36 pt sichtbar).
       .frame(minHeight: Mh.touch)
+      .contentShape(Rectangle())
   }
 }
 
@@ -144,8 +145,9 @@ struct MhZweitButtonStil: ButtonStyle {
         RoundedRectangle(cornerRadius: Mh.radiusMd, style: .continuous)
           .stroke(aktiv ? Mh.borderStrong : Mh.border, lineWidth: 1)
       )
-      .contentShape(Rectangle())
+      // Tippfläche = mindestens 44 pt, auch bei kleinen Buttons (36 pt sichtbar).
       .frame(minHeight: Mh.touch)
+      .contentShape(Rectangle())
   }
 }
 
