@@ -64,6 +64,9 @@ struct HelloBabyApp: App {
           }
       }
       .tint(Mh.primary)
+      // Grundschrift für alles, was keinen eigenen Stil setzt.
+      .font(MhTextStil.body.font)
+      .foregroundStyle(Mh.text)
       // Kurze Meldungen („Eintrag gespeichert“) über allen Ansichten.
       .overlay(alignment: .bottom) {
         if let text = appMeldung.text {
