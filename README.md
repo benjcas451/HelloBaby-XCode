@@ -6,7 +6,7 @@ komplett lokal oder gegen eine eigene Server-API.
 
 - **Sprache/UI:** Swift, SwiftUI mit dem Familien-Designsystem „Minze & Honig 2.0“ (Schrift Figtree, eigene Liniensymbole)
 - **Bundle-ID:** `ch.tschir.HelloBaby` (identisch zur Flutter-App → Installation ist ein Update)
-- **Version:** 3.4.0, `CURRENT_PROJECT_VERSION` lokal 105, in CI `100 + run_number`
+- **Version:** 3.4.1, `CURRENT_PROJECT_VERSION` lokal 106, in CI `100 + run_number`
 - **Deployment-Target:** iOS 17
 
 ## Funktionsumfang
@@ -332,7 +332,7 @@ Der Code ist unter `SWIFT_STRICT_CONCURRENCY=complete` warnungsfrei.
 - `.github/workflows/screenshots.yml` (Push auf `claude/**`, manuell):
   Bildschirmfotos, siehe „Gestaltung“.
 - `.github/workflows/build-ipa.yml` (manuell): unsignierte IPA als
-  GitHub-Release (`v3.4.0-<run>`), zum Sideloading.
+  GitHub-Release (`v3.4.1-<run>`), zum Sideloading.
 - `.github/workflows/upload-app-store.yml` (manuell): signierte IPA nach
   App Store Connect / TestFlight. Benötigt das GitHub Environment
   `app-store` mit denselben sechs Secrets wie im früheren Flutter-Repo:
