@@ -34,8 +34,12 @@ enum HbDatum {
     leser().string(from: datum)
   }
 
-  static func datum(_ iso: String) -> Date? {
-    leser().date(from: iso)
+  /// Tag aus ISO („2026-11-15“, lokale Ablage) oder deutscher Schreibweise
+  /// („15.11.2026“, liefert stats.php des Servers); nil, wenn es kein Datum
+  /// ist (z. B. „Keine Einträge“).
+  static func datum(_ text: String) -> Date? {
+    let t = text.trimmingCharacters(in: .whitespaces)
+    return leser().date(from: t) ?? leser("dd.MM.yyyy").date(from: t)
   }
 
   /// Uhrzeit „07:01“ aus `created_at` (Server „2026-11-15 07:01:00“,
@@ -47,14 +51,14 @@ enum HbDatum {
   }
 
   private static func formatiert(_ isoDatum: String, muster: String) -> String {
-    guard let datum = leser().date(from: isoDatum) else { return isoDatum }
-    return schreiber(muster).string(from: datum)
+    guard let tag = Self.datum(isoDatum) else { return isoDatum }
+    return schreiber(muster).string(from: tag)
   }
 
-  private static func leser() -> DateFormatter {
+  private static func leser(_ muster: String = "yyyy-MM-dd") -> DateFormatter {
     let formatter = DateFormatter()
     formatter.locale = Locale(identifier: "en_US_POSIX")
-    formatter.dateFormat = "yyyy-MM-dd"
+    formatter.dateFormat = muster
     return formatter
   }
 
