@@ -161,6 +161,8 @@ struct HomeView: View {
   private func laden() async {
     laedt = stats == nil
     fehler = nil
+    // Nur im Bildschirmfoto-Lauf (Launch-Argument), sonst ohne Wirkung.
+    await Bildschirmfotodaten.vorbereiten()
     // Erst das Liegengebliebene loswerden, dann laden: sonst zeigte die
     // Statistik einen Serverstand ohne die eigenen Einträge.
     let verworfen = await api.nachholen()
