@@ -227,8 +227,9 @@ private struct StartInhalt: View {
   private var kurzinfo: String {
     var teile: [String] = []
     if let titel = kDiaries[diary]?.title { teile.append(titel) }
-    if let erster = stats?.first, !erster.isEmpty { teile.append("seit \(HbDatum.anzeige(erster))") }
-    if let letzter = stats?.last, !letzter.isEmpty { teile.append("zuletzt \(HbDatum.anzeige(letzter))") }
+    // stats.php liefert „15.11.2026“ oder „Keine Einträge“, lokal ISO.
+    if let erster = stats?.first, HbDatum.datum(erster) != nil { teile.append("seit \(HbDatum.anzeige(erster))") }
+    if let letzter = stats?.last, HbDatum.datum(letzter) != nil { teile.append("zuletzt \(HbDatum.anzeige(letzter))") }
     return teile.joined(separator: " · ")
   }
 
