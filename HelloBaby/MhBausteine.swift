@@ -205,7 +205,9 @@ struct MhSegmente: View {
   @Binding var gewaehlt: Int
 
   var body: some View {
-    HStack(spacing: 2) {
+    // Tippfläche = volle Höhe (44 pt); die sichtbare Form sitzt 3 pt
+    // eingerückt darin, 2 pt Abstand zum Nachbarn wie im Web.
+    HStack(spacing: 0) {
       ForEach(Array(optionen.enumerated()), id: \.offset) { index, text in
         let aktiv = index == gewaehlt
         Button {
@@ -216,19 +218,21 @@ struct MhSegmente: View {
             .lineLimit(1)
             .foregroundStyle(aktiv ? Mh.textStrong : Mh.textSecondary)
             .padding(.horizontal, Mh.abstand3)
-            .frame(maxWidth: .infinity, minHeight: 36)
+            .frame(maxWidth: .infinity, minHeight: Mh.touch - 6)
             .background(
               RoundedRectangle(cornerRadius: 7, style: .continuous)
                 .fill(aktiv ? Mh.segmentOn : Color.clear)
                 .shadow(color: aktiv ? Color.black.opacity(0.06) : .clear, radius: 1, y: 1)
             )
+            .padding(.vertical, 3)
+            .padding(.horizontal, 1)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .accessibilityAddTraits(aktiv ? [.isSelected] : [])
       }
     }
-    .padding(3)
+    .padding(.horizontal, 2)
     .background(RoundedRectangle(cornerRadius: Mh.radiusMd, style: .continuous).fill(Mh.surfaceSubtle))
     .overlay(RoundedRectangle(cornerRadius: Mh.radiusMd, style: .continuous).stroke(Mh.border, lineWidth: 1))
     .frame(minHeight: Mh.touch)

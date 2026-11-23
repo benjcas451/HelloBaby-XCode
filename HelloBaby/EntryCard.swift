@@ -63,10 +63,12 @@ struct EntryCard: View {
             .monospacedDigit()
             .foregroundStyle(Mh.textSecondary)
             .frame(maxWidth: .infinity, alignment: .leading)
+          // Tippfläche 44 pt, im Layout aber nur so hoch wie das Symbol:
+          // sonst würde die Kopfzeile unnötig hoch.
           stern
+            .padding(.vertical, -Mh.abstand3)
+            .padding(.trailing, -Mh.abstand3)
         }
-        .padding(.vertical, -Mh.abstand2)
-        .padding(.trailing, -Mh.abstand3)
 
         ForEach(Array(texte.enumerated()), id: \.element.key) { index, feld in
           VStack(alignment: .leading, spacing: 2) {
