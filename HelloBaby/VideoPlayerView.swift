@@ -26,6 +26,8 @@ struct VideoPlayerView: View {
     .navigationTitle("Video")
     .navigationBarTitleDisplayMode(.inline)
     .toolbarColorScheme(.dark, for: .navigationBar)
+    .toolbarBackground(Color.black, for: .navigationBar)
+    .toolbarBackground(.visible, for: .navigationBar)
     .onAppear {
       guard player == nil else { return }
       let url: URL? =

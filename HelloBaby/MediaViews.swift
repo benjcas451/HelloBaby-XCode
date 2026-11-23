@@ -1,59 +1,56 @@
 import SwiftUI
 
-// MARK: - Bilder-Feed (Galerie über alle Einträge)
+// MARK: - Reiter „Galerie“ (alle Einträge mit Medien, 3er-Raster nach Tagen)
 
 struct ImageFeedView: View {
+
+  let diary: String
+  let schluessel: String
+  let onNeuLaden: () async -> Void
 
   @State private var gruppen: [Tagesgruppe] = []
   @State private var laedt = true
   @State private var fehler: String?
   @State private var vollbild: VollbildKontext?
+  @State private var intern = 0
 
   private let api = ApiClient.shared
-  private let spalten = [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())]
+  private let spalten = Array(repeating: GridItem(.flexible(), spacing: 6), count: 3)
 
   var body: some View {
     Group {
       if laedt {
         LadeAnsicht()
       } else if let fehler {
-        FehlerAnsicht(text: fehler) { Task { await laden() } }
-      } else if gruppen.isEmpty {
-        LeerAnsicht(symbol: "photo.on.rectangle", text: "Noch keine Bilder vorhanden.")
+        FehlerAnsicht(text: "Die Galerie konnte nicht geladen werden. \(fehler)") { intern += 1 }
       } else {
         ScrollView {
-          LazyVGrid(columns: spalten, spacing: 4) {
-            ForEach(gruppen) { gruppe in
-              Section {
-                ForEach(gruppe.kacheln) { kachel in
-                  zelle(kachel)
+          Group {
+            if gruppen.isEmpty {
+              LeerAnsicht(text: "Noch keine Einträge mit Fotos oder Videos")
+            } else {
+              LazyVGrid(columns: spalten, spacing: 6) {
+                ForEach(gruppen) { gruppe in
+                  Section {
+                    ForEach(gruppe.kacheln) { kachel in
+                      zelle(kachel)
+                    }
+                  } header: {
+                    MhGruppenLabel(HbDatum.mitWochentag(gruppe.datum))
+                      .frame(maxWidth: .infinity, alignment: .leading)
+                  }
                 }
-              } header: {
-                Text(HbDatum.mitWochentag(gruppe.datum))
-                  .font(.subheadline.bold())
-                  .foregroundStyle(Hb.accentDeep)
-                  .frame(maxWidth: .infinity, alignment: .leading)
-                  .padding(.vertical, 6)
               }
             }
           }
-          .padding(.horizontal, 8)
+          .padding(.horizontal, Mh.rand)
+          .padding(.bottom, Mh.abstand8)
+          .hbBreite()
         }
+        .refreshable { await onNeuLaden() }
       }
     }
-    .hbHintergrund()
-    .navigationTitle("Galerie")
-    .navigationBarTitleDisplayMode(.inline)
-    .toolbar {
-      ToolbarItem(placement: .topBarTrailing) {
-        Button {
-          Task { await laden() }
-        } label: {
-          Image(systemName: "arrow.clockwise")
-        }
-      }
-    }
-    .task { await laden() }
+    .task(id: "\(schluessel)/\(intern)") { await laden() }
     .fullScreenCover(item: $vollbild) { kontext in
       FullscreenGalleryView(
         folder: kontext.folder, dateien: kontext.dateien, start: kontext.start)
@@ -65,9 +62,10 @@ struct ImageFeedView: View {
     let thumb = MediaThumb(folder: kachel.entry.bilder, file: kachel.datei)
     if isVideoFile(kachel.datei) {
       NavigationLink(value: Ziel.video(url: thumb.quelle)) {
-        thumb.aspectRatio(1, contentMode: .fit)
+        MedienKachel(thumb: thumb)
       }
       .buttonStyle(.plain)
+      .accessibilityLabel("Video")
     } else {
       Button {
         let bilder = kachel.entry.bilderFiles.filter(isImageFile)
@@ -76,9 +74,10 @@ struct ImageFeedView: View {
           dateien: bilder,
           start: bilder.firstIndex(of: kachel.datei) ?? 0)
       } label: {
-        thumb.aspectRatio(1, contentMode: .fit)
+        MedienKachel(thumb: thumb)
       }
       .buttonStyle(.plain)
+      .accessibilityLabel("Foto")
     }
   }
 
@@ -86,13 +85,28 @@ struct ImageFeedView: View {
     laedt = gruppen.isEmpty
     fehler = nil
     do {
-      let eintraege = try await api.getEntriesWithImages(diary: AppSettings.activeDiary)
+      let eintraege = try await api.getEntriesWithImages(diary: diary)
+      guard !Task.isCancelled else { return }
       gruppen = Tagesgruppe.aus(eintraege)
     } catch {
+      guard !Task.isCancelled else { return }
       fehler = error.localizedDescription
       gruppen = []
     }
     laedt = false
+  }
+}
+
+/// Quadratische Medienkachel mit kleinem Radius.
+struct MedienKachel: View {
+  let thumb: MediaThumb
+
+  var body: some View {
+    thumb
+      .aspectRatio(1, contentMode: .fit)
+      .frame(maxWidth: .infinity)
+      .background(Mh.surfaceSubtle)
+      .clipShape(RoundedRectangle(cornerRadius: Mh.radiusSm, style: .continuous))
   }
 }
 
@@ -121,7 +135,7 @@ struct Tagesgruppe: Identifiable {
         Tagesgruppe(
           datum: datum,
           kacheln: tagesEintraege.flatMap { eintrag in
-            eintrag.bilderFiles.map {
+            eintrag.bilderFiles.filter { isImageFile($0) || isVideoFile($0) }.map {
               Kachel(id: "\(eintrag.id)/\($0)", entry: eintrag, datei: $0)
             }
           })
@@ -149,29 +163,49 @@ struct GalleryView: View {
   @State private var meldung: String?
 
   private let api = ApiClient.shared
+  private let spalten = Array(repeating: GridItem(.flexible(), spacing: 6), count: 2)
+
+  private var medien: [String] { dateien.filter { isImageFile($0) || isVideoFile($0) } }
+  private var andere: [String] { dateien.filter { !isImageFile($0) && !isVideoFile($0) } }
 
   var body: some View {
     Group {
       if laedt {
         LadeAnsicht()
       } else if let fehler {
-        FehlerAnsicht(text: fehler) { Task { await laden() } }
+        FehlerAnsicht(text: "Die Fotos konnten nicht geladen werden. \(fehler)") {
+          Task { await laden() }
+        }
       } else if dateien.isEmpty {
-        LeerAnsicht(symbol: "photo", text: "Dieser Ordner enthält keine Medien.")
+        LeerAnsicht(text: "Keine Dateien zu diesem Eintrag")
+          .frame(maxHeight: .infinity, alignment: .top)
       } else {
         ScrollView {
-          VStack(spacing: 12) {
-            ForEach(dateien, id: \.self) { datei in
-              zelle(datei)
+          VStack(alignment: .leading, spacing: 0) {
+            LazyVGrid(columns: spalten, spacing: 6) {
+              ForEach(medien, id: \.self) { datei in
+                zelle(datei)
+              }
+            }
+            .padding(.top, Mh.abstand2)
+            if !andere.isEmpty {
+              MhGruppenLabel("Weitere Dateien")
+              ForEach(Array(andere.enumerated()), id: \.element) { index, datei in
+                if index > 0 { MhTrennlinie() }
+                andereDatei(datei)
+              }
             }
           }
-          .padding()
+          .padding(.horizontal, Mh.rand)
+          .padding(.bottom, Mh.abstand8)
+          .hbBreite()
         }
+        .refreshable { await laden() }
       }
     }
-    .hbHintergrund()
-    .navigationTitle("Galerie")
-    .navigationBarTitleDisplayMode(.inline)
+    .background(Mh.bg.ignoresSafeArea())
+    .navigationTitle("Fotos")
+    .navigationBarTitleDisplayMode(.large)
     .task { await laden() }
     .fullScreenCover(item: $vollbild) { kontext in
       FullscreenGalleryView(
@@ -190,47 +224,40 @@ struct GalleryView: View {
   @ViewBuilder
   private func zelle(_ datei: String) -> some View {
     let thumb = MediaThumb(folder: folder, file: datei)
-    VStack(alignment: .leading, spacing: 6) {
-      Group {
-        if isVideoFile(datei) {
-          NavigationLink(value: Ziel.video(url: thumb.quelle)) {
-            thumb.frame(height: 240).frame(maxWidth: .infinity)
-          }
-          .buttonStyle(.plain)
-        } else if isImageFile(datei) {
-          Button {
-            let bilder = dateien.filter(isImageFile)
-            vollbild = VollbildKontext(
-              folder: folder, dateien: bilder, start: bilder.firstIndex(of: datei) ?? 0)
-          } label: {
-            thumb.frame(height: 240).frame(maxWidth: .infinity)
-          }
-          .buttonStyle(.plain)
-        } else {
-          Button {
-            if isLocalMediaSource(folder) {
-              meldung = "Dieses Format kann nur am Rechner geöffnet werden."
-            } else {
-              meldung = "Download-Link: \(api.mediaUrl(thumb.quelle, download: true))"
-            }
-          } label: {
-            HStack {
-              Image(systemName: "arrow.down.doc")
-              Text("\(datei) – nur Download")
-              Spacer()
-            }
-            .padding()
-          }
-          .buttonStyle(.plain)
-        }
+    if isVideoFile(datei) {
+      NavigationLink(value: Ziel.video(url: thumb.quelle)) {
+        MedienKachel(thumb: thumb)
       }
-      Text(datei)
-        .font(.caption)
-        .foregroundStyle(.secondary)
-        .padding(.horizontal, 10)
-        .padding(.bottom, 8)
+      .buttonStyle(.plain)
+      .accessibilityLabel("Video")
+    } else {
+      Button {
+        let bilder = dateien.filter(isImageFile)
+        vollbild = VollbildKontext(
+          folder: folder, dateien: bilder, start: bilder.firstIndex(of: datei) ?? 0)
+      } label: {
+        MedienKachel(thumb: thumb)
+      }
+      .buttonStyle(.plain)
+      .accessibilityLabel("Foto")
     }
-    .hbKarte()
+  }
+
+  /// Dateien, die die App nicht anzeigt (HEIC, PSD …): nur zum Herunterladen.
+  private func andereDatei(_ datei: String) -> some View {
+    let endung = (datei as NSString).pathExtension.uppercased()
+    return Button {
+      if isLocalMediaSource(folder) {
+        meldung = "Dieses Format kann nur am Rechner geöffnet werden."
+      } else {
+        meldung = "Download-Link: \(api.mediaUrl(folder + "/" + datei, download: true))"
+      }
+    } label: {
+      MhListenZeile(
+        datei, untertitel: endung.isEmpty ? "Nur Download" : "\(endung) – nur Download",
+        symbol: "MhDownload")
+    }
+    .buttonStyle(.plain)
   }
 
   private func laden() async {
@@ -270,13 +297,17 @@ struct FullscreenGalleryView: View {
       .navigationTitle("\(index + 1) / \(dateien.count)")
       .navigationBarTitleDisplayMode(.inline)
       .toolbarColorScheme(.dark, for: .navigationBar)
+      .toolbarBackground(Color.black, for: .navigationBar)
+      .toolbarBackground(.visible, for: .navigationBar)
       .toolbar {
         ToolbarItem(placement: .topBarLeading) {
           Button {
             dismiss()
           } label: {
-            Image(systemName: "xmark")
+            MhSymbol("MhClose")
           }
+          .tint(Color.white)
+          .accessibilityLabel("Schließen")
         }
       }
     }
@@ -337,7 +368,7 @@ private struct ZoombaresBild: View {
       if let bild = UIImage(contentsOfFile: folder + "/" + file) {
         Image(uiImage: bild).resizable().scaledToFit()
       } else {
-        Image(systemName: "photo").foregroundStyle(.white)
+        MhSymbol("MhImage", groesse: Mh.symbolGross).foregroundStyle(Color.white)
       }
     } else {
       MedienBild(url: ApiClient.shared.mediaUrl(folder + "/" + file)) { bild in
@@ -345,7 +376,7 @@ private struct ZoombaresBild: View {
       } platzhalter: {
         ProgressView().tint(.white)
       } fehler: {
-        Image(systemName: "photo").foregroundStyle(.white)
+        MhSymbol("MhImage", groesse: Mh.symbolGross).foregroundStyle(Color.white)
       }
     }
   }

@@ -24,33 +24,42 @@ struct PapierkorbView: View {
       if laedt {
         LadeAnsicht()
       } else if let fehler {
-        FehlerAnsicht(text: fehler) { Task { await laden() } }
-      } else if eintraege.isEmpty {
-        LeerAnsicht(
-          symbol: "trash",
-          text: "Der Papierkorb ist leer.\nGelöschte Einträge bleiben 30 Tage hier liegen "
-            + "und verschwinden danach endgültig.")
+        FehlerAnsicht(text: "Der Papierkorb konnte nicht geladen werden. \(fehler)") {
+          Task { await laden() }
+        }
       } else {
         ScrollView {
-          VStack(alignment: .leading, spacing: 12) {
-            ForEach(eintraege) { eintrag in
-              karte(eintrag)
+          VStack(alignment: .leading, spacing: Mh.abstand3) {
+            Text("Gelöschte Einträge bleiben 30 Tage hier und verschwinden danach endgültig.")
+              .mhText(.small)
+              .foregroundStyle(Mh.textSecondary)
+            if eintraege.isEmpty {
+              LeerAnsicht(text: "Der Papierkorb ist leer")
+            } else {
+              ForEach(eintraege) { eintrag in
+                karte(eintrag)
+              }
             }
           }
-          .padding()
+          .padding(.horizontal, Mh.rand)
+          .padding(.top, Mh.abstand1)
+          .padding(.bottom, Mh.abstand8)
+          .hbBreite()
         }
+        .refreshable { await laden() }
       }
     }
-    .hbHintergrund()
+    .background(Mh.bg.ignoresSafeArea())
     .navigationTitle("Papierkorb")
-    .navigationBarTitleDisplayMode(.inline)
+    .navigationBarTitleDisplayMode(.large)
     .toolbar {
       ToolbarItem(placement: .topBarTrailing) {
         Button {
           Task { await laden() }
         } label: {
-          Image(systemName: "arrow.clockwise")
+          MhSymbol("MhRefresh")
         }
+        .accessibilityLabel("Neu laden")
       }
     }
     .task { await laden() }
@@ -71,7 +80,7 @@ struct PapierkorbView: View {
       presenting: endgueltig
     ) { eintrag in
       Button("Endgültig löschen", role: .destructive) {
-        ausfuehren(eintrag, erfolg: "Der Eintrag wurde endgültig gelöscht.") {
+        ausfuehren(eintrag, erfolg: "Eintrag endgültig gelöscht") {
           try await api.papierkorbLoeschen(kennung: eintrag.kennung)
         }
       }
@@ -88,7 +97,7 @@ struct PapierkorbView: View {
       // Der Vorschlag des Servers zuerst.
       ForEach(tagebuchAuswahl(fuer: eintrag), id: \.id) { diary in
         Button(diary.id == eintrag.diaryVorschlag ? "\(diary.label) (Vorschlag)" : diary.label) {
-          ausfuehren(eintrag, erfolg: "Die Medien wurden als Eintrag ohne Text wiederhergestellt.") {
+          ausfuehren(eintrag, erfolg: "Medien als Eintrag ohne Text wiederhergestellt") {
             _ = try await api.papierkorbWiederherstellen(
               kennung: eintrag.kennung, diary: diary.id, vonName: AppSettings.selectedUser)
           }
@@ -109,78 +118,92 @@ struct PapierkorbView: View {
   }
 
   private func karte(_ eintrag: PapierkorbEintrag) -> some View {
-    VStack(alignment: .leading, spacing: 8) {
-      Text(eintrag.titel)
-        .font(.subheadline.bold())
-        .foregroundStyle(Hb.accentDeep)
-      if !eintrag.eintrag.vonName.isEmpty {
-        Text("von \(eintrag.eintrag.vonName)")
-          .font(.caption)
-          .foregroundStyle(.secondary)
-      }
-
-      if let diary = kDiaries[eintrag.diary] {
-        ForEach(diary.fields, id: \.key) { feld in
-          let wert = eintrag.eintrag.fields[feld.key] ?? ""
-          if !wert.isEmpty, !(feld.numeric && wert == "0") {
-            Text("\(feld.label): \(wert)\(feld.unit.isEmpty ? "" : " " + feld.unit)")
-              .font(.subheadline)
+    let diary = kDiaries[eintrag.diary]
+    let zeile = eintrag.eintrag
+    return MhKarte {
+      VStack(alignment: .leading, spacing: Mh.abstand2) {
+        VStack(alignment: .leading, spacing: 2) {
+          Text(eintrag.titel)
+            .mhText(.h3)
+            .foregroundStyle(Mh.textStrong)
+          if !zeile.vonName.isEmpty {
+            Text("von \(zeile.vonName)")
+              .mhText(.small)
+              .foregroundStyle(Mh.textSecondary)
           }
         }
-      } else {
-        Text(eintrag.ohneEintragText)
-          .font(.subheadline)
-      }
-      if eintrag.medien > 0 {
-        Text(eintrag.medienText).font(.subheadline)
-      }
-      // Vorschaubilder: zeigen, was wiederhergestellt oder gelöscht wird.
-      if !eintrag.dateien.isEmpty {
-        ScrollView(.horizontal, showsIndicators: false) {
-          HStack(spacing: 8) {
-            ForEach(eintrag.dateien, id: \.self) { datei in
-              vorschau(eintrag, datei)
+
+        if let diary {
+          ForEach(diary.fields.filter(\.textarea), id: \.key) { feld in
+            let wert = zeile.fields[feld.key] ?? ""
+            if !wert.isEmpty {
+              Text(wert)
+                .mhText(.body)
+                .foregroundStyle(Mh.text)
+                .fixedSize(horizontal: false, vertical: true)
             }
           }
+          let zahlen = hbZahlenMarken(zeile.fields, diary: diary)
+          if !zahlen.isEmpty {
+            HbReihe {
+              ForEach(zahlen, id: \.self) { MhMarke($0) }
+            }
+          }
+        } else {
+          Text(eintrag.ohneEintragText)
+            .mhText(.small)
+            .foregroundStyle(Mh.text)
         }
-      }
-      Text(eintrag.fristText)
-        .font(.caption)
-        .foregroundStyle(.secondary)
-
-      HStack(spacing: 10) {
-        if eintrag.wiederherstellbar {
-          Button {
-            if eintrag.diary.isEmpty {
-              // Ohne Eintrag weiß niemand mehr, in welchem Tagebuch die
-              // Medien standen.
-              tagebuchWahl = eintrag
-            } else {
-              ausfuehren(eintrag, erfolg: "Der Eintrag wurde wiederhergestellt.") {
-                _ = try await api.papierkorbWiederherstellen(kennung: eintrag.kennung)
+        if eintrag.medien > 0 {
+          Text(eintrag.medienText)
+            .mhText(.small)
+            .foregroundStyle(Mh.textSecondary)
+        }
+        // Vorschaubilder: zeigen, was wiederhergestellt oder gelöscht wird.
+        if !eintrag.dateien.isEmpty {
+          ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 6) {
+              ForEach(eintrag.dateien, id: \.self) { datei in
+                vorschau(eintrag, datei)
               }
             }
-          } label: {
-            Label("Wiederherstellen", systemImage: "arrow.uturn.backward")
           }
-          .buttonStyle(.borderedProminent)
         }
-        Button(role: .destructive) {
-          endgueltig = eintrag
-        } label: {
-          Label("Endgültig löschen", systemImage: "trash.slash")
+        Text(eintrag.fristText)
+          .mhText(.small)
+          .foregroundStyle(Mh.textTertiary)
+
+        HbReihe(abstand: Mh.abstand2) {
+          if eintrag.wiederherstellbar {
+            Button {
+              if eintrag.diary.isEmpty {
+                // Ohne Eintrag weiß niemand mehr, in welchem Tagebuch die
+                // Medien standen.
+                tagebuchWahl = eintrag
+              } else {
+                ausfuehren(eintrag, erfolg: "Eintrag wiederhergestellt") {
+                  _ = try await api.papierkorbWiederherstellen(kennung: eintrag.kennung)
+                }
+              }
+            } label: {
+              MhButtonInhalt("Wiederherstellen", symbol: "MhUndo", symbolGroesse: 18)
+            }
+            .buttonStyle(.mhZweit)
+          }
+          HStack(spacing: Mh.abstand2) {
+            Button("Endgültig löschen") {
+              endgueltig = eintrag
+            }
+            .buttonStyle(.mhLoeschen)
+            if inArbeit == eintrag.kennung {
+              ProgressView().controlSize(.small).tint(Mh.primary)
+            }
+          }
         }
-        .buttonStyle(.bordered)
-        if inArbeit == eintrag.kennung {
-          ProgressView().controlSize(.small)
-        }
+        .disabled(inArbeit != nil)
+        .padding(.top, Mh.abstand1)
       }
-      .font(.subheadline)
-      .disabled(inArbeit != nil)
     }
-    .padding(14)
-    .frame(maxWidth: .infinity, alignment: .leading)
-    .hbKarte()
   }
 
   /// Vorschaubild einer Datei; bei Videos das Standbild mit Abspiel-Zeichen.
@@ -188,19 +211,16 @@ struct PapierkorbView: View {
     MedienBild(url: api.papierkorbVorschauUrl(kennung: eintrag.kennung, datei: datei)) { bild in
       bild.resizable().scaledToFill()
     } platzhalter: {
-      ProgressView()
+      ProgressView().tint(Mh.textTertiary)
     } fehler: {
-      Image(systemName: "photo").foregroundStyle(.secondary)
+      MhSymbol("MhImage").foregroundStyle(Mh.textTertiary)
     }
-    .frame(width: 96, height: 96)
-    .background(Color.secondary.opacity(0.15))
-    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+    .frame(width: 72, height: 72)
+    .background(Mh.surfaceSubtle)
+    .clipShape(RoundedRectangle(cornerRadius: Mh.radiusSm, style: .continuous))
     .overlay {
       if isVideoFile(datei) {
-        Image(systemName: "play.circle.fill")
-          .font(.title)
-          .foregroundStyle(.white)
-          .shadow(radius: 2)
+        HbVideoMarke()
       }
     }
     .accessibilityLabel(isVideoFile(datei) ? "Standbild des Videos" : "Foto")
@@ -229,10 +249,10 @@ struct PapierkorbView: View {
         try await aktion()
         // Sofort aus der Liste nehmen; das Neuladen bestätigt es.
         eintraege.removeAll { $0.kennung == eintrag.kennung }
-        meldung = erfolg
+        AppMeldung.shared.zeige(erfolg)
         await laden()
       } catch {
-        meldung = "Fehler: \(error.localizedDescription)"
+        meldung = "Das hat nicht geklappt: \(error.localizedDescription)"
       }
       inArbeit = nil
     }

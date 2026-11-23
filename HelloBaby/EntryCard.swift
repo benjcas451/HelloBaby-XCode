@@ -2,12 +2,13 @@ import AVFoundation
 import ImageIO
 import SwiftUI
 
-/// Karte eines Tagebuch-Eintrags: Kopfzeile (erstellt am / von), dynamische
-/// Tagebuch-Felder, Favoriten-Stern, Galerie-Link und Löschen – wie die
-/// Flutter-App.
+/// Karte eines Tagebucheintrags wie im Web: Kopfzeile „[Datum ·] 07:01 ·
+/// Name“ mit Stern, Haupttext ohne Label, weitere Texte mit kleinem Label,
+/// Zahlen als Marken, Fotos als Raster, „Löschen“ als roter Text.
 struct EntryCard: View {
 
   let entry: Entry
+  var mitDatum: Bool
   var onGeloescht: () -> Void
   var onMeldung: (String) -> Void
 
@@ -20,87 +21,99 @@ struct EntryCard: View {
 
   init(
     entry: Entry,
+    mitDatum: Bool = false,
     onGeloescht: @escaping () -> Void,
     onMeldung: @escaping (String) -> Void
   ) {
     self.entry = entry
+    self.mitDatum = mitDatum
     self.onGeloescht = onGeloescht
     self.onMeldung = onMeldung
     _favorit = State(initialValue: entry.favorit == 1)
   }
 
-  private var diary: Diary? { kDiaries[entry.diary] }
+  private var diary: Diary? { kDiaries[entry.diary] ?? kDiaries[AppSettings.activeDiary] }
+
+  /// Texte des Tagebuchs, die etwas enthalten.
+  private var texte: [DiaryField] {
+    (diary?.fields ?? []).filter {
+      $0.textarea && !(entry.fields[$0.key] ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+  }
+
+  private var medien: [String] {
+    entry.bilderFiles.filter { isImageFile($0) || isVideoFile($0) }
+  }
+
+  private var kopfzeile: String {
+    var teile: [String] = []
+    if mitDatum, !entry.kalenderDatum.isEmpty { teile.append(HbDatum.anzeige(entry.kalenderDatum)) }
+    let zeit = HbDatum.uhrzeit(entry.createdAt)
+    if !zeit.isEmpty { teile.append(zeit) }
+    if !entry.vonName.isEmpty { teile.append(entry.vonName) }
+    return teile.joined(separator: " · ")
+  }
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 10) {
-      HStack {
-        Text("Erstellt am \(entry.createdAt)")
-          .font(.caption)
-          .foregroundStyle(.secondary)
-        Spacer()
-        if !entry.vonName.isEmpty {
-          Text("von \(entry.vonName)")
-            .font(.caption.bold())
-            .foregroundStyle(Hb.accentDeep)
+    MhKarte {
+      VStack(alignment: .leading, spacing: Mh.abstand3) {
+        HStack(spacing: Mh.abstand2) {
+          Text(kopfzeile)
+            .mhText(.small)
+            .monospacedDigit()
+            .foregroundStyle(Mh.textSecondary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+          stern
         }
-      }
+        .padding(.vertical, -Mh.abstand2)
+        .padding(.trailing, -Mh.abstand3)
 
-      ForEach(diary?.fields ?? [], id: \.key) { feld in
-        let wert = entry.fields[feld.key] ?? ""
-        if feld.numeric, !wert.isEmpty, wert != "0" {
-          HStack(spacing: 8) {
-            Image(systemName: Self.symbol(fuer: feld.key))
-              .foregroundStyle(Hb.accentDeep)
-            Text("\(feld.label):").bold()
-            Text("\(wert) \(feld.unit)")
-          }
-          .font(.subheadline)
-        } else if feld.textarea, !wert.isEmpty {
+        ForEach(Array(texte.enumerated()), id: \.element.key) { index, feld in
           VStack(alignment: .leading, spacing: 2) {
-            Text("\(feld.label):").bold()
-            Text(wert)
-          }
-          .font(.subheadline)
-        }
-      }
-
-      HStack {
-        Button {
-          favoritUmschalten()
-        } label: {
-          if favoritLaeuft {
-            ProgressView().controlSize(.small)
-          } else {
-            Image(systemName: favorit ? "star.fill" : "star")
-              .foregroundStyle(favorit ? Hb.gold : .secondary)
+            // Das Pflichtfeld ist der Haupttext und braucht kein Label.
+            if index > 0 || !feld.required {
+              Text(feld.label).mhText(.label).foregroundStyle(Mh.textSecondary)
+            }
+            Text(entry.fields[feld.key] ?? "")
+              .mhText(.body)
+              .foregroundStyle(Mh.text)
+              .fixedSize(horizontal: false, vertical: true)
           }
         }
-        .buttonStyle(.plain)
 
-        if !entry.bilder.isEmpty {
+        let zahlen = hbZahlenMarken(entry.fields, diary: diary)
+        if !zahlen.isEmpty {
+          HbReihe {
+            ForEach(zahlen, id: \.self) { MhMarke($0) }
+          }
+        }
+
+        if !medien.isEmpty {
           NavigationLink(value: Ziel.gallery(folder: entry.bilder)) {
-            Text("Galerie").font(.subheadline.bold())
+            fotoRaster
           }
+          .buttonStyle(.plain)
+          .accessibilityLabel(medien.count == 1 ? "Foto ansehen" : "\(medien.count) Fotos ansehen")
+        } else if !entry.bilder.isEmpty {
+          NavigationLink(value: Ziel.gallery(folder: entry.bilder)) {
+            MhButtonInhalt("Fotos ansehen", symbol: "MhImage", symbolGroesse: 16)
+          }
+          .buttonStyle(.mhText)
+          .padding(.vertical, -Mh.abstand2)
         }
 
-        Spacer()
-
-        Button(role: .destructive) {
-          loeschenBestaetigen = true
-        } label: {
+        HStack(spacing: Mh.abstand2) {
+          Spacer(minLength: 0)
           if loeschenLaeuft {
-            ProgressView().controlSize(.small)
-          } else {
-            Image(systemName: "trash")
+            ProgressView().controlSize(.small).tint(Mh.danger)
           }
+          Button("Löschen") { loeschenBestaetigen = true }
+            .buttonStyle(.mhLoeschen)
+            .disabled(loeschenLaeuft)
         }
-        .buttonStyle(.plain)
-        .foregroundStyle(.red.opacity(0.7))
+        .padding(.vertical, -Mh.abstand2)
       }
     }
-    .padding(14)
-    .frame(maxWidth: .infinity, alignment: .leading)
-    .hbKarte()
     .confirmationDialog(
       "Eintrag löschen?", isPresented: $loeschenBestaetigen, titleVisibility: .visible
     ) {
@@ -115,6 +128,53 @@ struct EntryCard: View {
     }
   }
 
+  /// Favoritenstern: gesetzt gefüllt in Honig, sonst Linie in Nebentextfarbe.
+  @ViewBuilder
+  private var stern: some View {
+    if favoritLaeuft {
+      ProgressView()
+        .controlSize(.small)
+        .tint(Mh.primary)
+        .frame(width: Mh.touch, height: Mh.touch)
+    } else {
+      MhSymbolButton(
+        favorit ? "MhStarGefuellt" : "MhStar",
+        beschreibung: favorit ? "Favorit entfernen" : "Als Favorit markieren",
+        farbe: favorit ? Mh.textYellow : Mh.textSecondary
+      ) {
+        favoritUmschalten()
+      }
+    }
+  }
+
+  /// Bis zu drei Vorschaubilder; bei mehr Medien trägt das dritte „+n“.
+  private var fotoRaster: some View {
+    HStack(spacing: 6) {
+      ForEach(0..<3, id: \.self) { index in
+        if index < medien.count {
+          MediaThumb(folder: entry.bilder, file: medien[index])
+            .aspectRatio(1, contentMode: .fit)
+            .frame(maxWidth: .infinity)
+            .background(Mh.surfaceSubtle)
+            .overlay {
+              if index == 2, medien.count > 3 {
+                ZStack {
+                  Color.black.opacity(0.6)
+                  Text("+\(medien.count - 3)").mhText(.h3).foregroundStyle(Color.white)
+                }
+              }
+            }
+            .clipShape(RoundedRectangle(cornerRadius: Mh.radiusSm, style: .continuous))
+        } else {
+          Color.clear
+            .aspectRatio(1, contentMode: .fit)
+            .frame(maxWidth: .infinity)
+        }
+      }
+    }
+    .contentShape(Rectangle())
+  }
+
   private func favoritUmschalten() {
     guard !favoritLaeuft else { return }
     favoritLaeuft = true
@@ -127,7 +187,7 @@ struct EntryCard: View {
           id: entry.id, diary: entry.diary, aktuell: favorit ? 1 : 0)
         favorit = neu == 1
       } catch {
-        onMeldung("Favorit fehlgeschlagen: \(error.localizedDescription)")
+        onMeldung("Favorit nicht gespeichert: \(error.localizedDescription)")
       }
       favoritLaeuft = false
     }
@@ -139,19 +199,12 @@ struct EntryCard: View {
     Task {
       do {
         try await api.deleteEntry(id: entry.id, diary: entry.diary)
+        AppMeldung.shared.zeige("Eintrag gelöscht")
         onGeloescht()
       } catch {
         onMeldung("Löschen fehlgeschlagen: \(error.localizedDescription)")
       }
       loeschenLaeuft = false
-    }
-  }
-
-  private static func symbol(fuer key: String) -> String {
-    switch key {
-    case "gewicht": return "scalemass"
-    case "kopfumfang": return "face.smiling"
-    default: return "ruler"
     }
   }
 }
@@ -186,26 +239,23 @@ struct MediaThumb: View {
               .resizable()
               .scaledToFill()
           } else {
-            Rectangle().fill(Color.black.opacity(istVideo ? 0.85 : 0.08))
+            Rectangle().fill(istVideo ? Color.black.opacity(0.85) : Mh.surfaceSubtle)
           }
         } else {
           MedienBild(url: ApiClient.shared.thumbUrl(quelle)) { bild in
             bild.resizable().scaledToFill()
           } platzhalter: {
-            Rectangle().fill(Color.black.opacity(0.05))
-              .overlay(ProgressView())
+            Rectangle().fill(Mh.surfaceSubtle)
+              .overlay(ProgressView().tint(Mh.textTertiary))
           } fehler: {
-            Rectangle().fill(Color.black.opacity(0.1))
-              .overlay(Image(systemName: "photo").foregroundStyle(.secondary))
+            Rectangle().fill(Mh.surfaceSubtle)
+              .overlay(MhSymbol("MhImage").foregroundStyle(Mh.textTertiary))
           }
         }
       }
       .overlay {
         if istVideo {
-          Image(systemName: "play.circle.fill")
-            .font(.title)
-            .foregroundStyle(.white)
-            .shadow(radius: 4)
+          HbVideoMarke()
         }
       }
       .clipped()
@@ -257,54 +307,5 @@ struct MediaThumb: View {
     generator.maximumSize = CGSize(width: CGFloat(vorschauKante), height: CGFloat(vorschauKante))
     guard let bild = try? await generator.image(at: .zero).image else { return nil }
     return UIImage(cgImage: bild)
-  }
-}
-
-// MARK: - Kleine Zustands-Ansichten
-
-struct LadeAnsicht: View {
-  var body: some View {
-    VStack(spacing: 12) {
-      ProgressView()
-      Text("Wird geladen…").foregroundStyle(.secondary)
-    }
-    .frame(maxWidth: .infinity, maxHeight: .infinity)
-  }
-}
-
-struct FehlerAnsicht: View {
-  let text: String
-  var erneut: () -> Void
-
-  var body: some View {
-    VStack(spacing: 12) {
-      Image(systemName: AppSettings.mode == .local ? "internaldrive" : "wifi.slash")
-        .font(.largeTitle)
-        .foregroundStyle(.secondary)
-      Text(text)
-        .multilineTextAlignment(.center)
-        .foregroundStyle(.secondary)
-      Button("Erneut versuchen", action: erneut)
-        .buttonStyle(.borderedProminent)
-    }
-    .padding()
-    .frame(maxWidth: .infinity, maxHeight: .infinity)
-  }
-}
-
-struct LeerAnsicht: View {
-  let symbol: String
-  let text: String
-
-  var body: some View {
-    VStack(spacing: 12) {
-      Image(systemName: symbol)
-        .font(.largeTitle)
-        .foregroundStyle(.secondary)
-      Text(text)
-        .multilineTextAlignment(.center)
-        .foregroundStyle(.secondary)
-    }
-    .frame(maxWidth: .infinity, maxHeight: .infinity)
   }
 }

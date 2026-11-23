@@ -4,15 +4,17 @@ Natives iOS-Pendant der früheren Flutter-App **HelloBaby!** – ein
 Schwangerschafts- und Entwicklungstagebuch mit Fotos/Videos, wahlweise
 komplett lokal oder gegen eine eigene Server-API.
 
-- **Sprache/UI:** Swift, SwiftUI (eigenes Baby-Grün-Theme wie die Flutter-App)
+- **Sprache/UI:** Swift, SwiftUI mit dem Familien-Designsystem „Minze & Honig 2.0“ (Schrift Figtree, eigene Liniensymbole)
 - **Bundle-ID:** `ch.tschir.HelloBaby` (identisch zur Flutter-App → Installation ist ein Update)
-- **Version:** 3.0.3, `CURRENT_PROJECT_VERSION` lokal 100, in CI `100 + run_number`
+- **Version:** 3.4.0, `CURRENT_PROJECT_VERSION` lokal 105, in CI `100 + run_number`
 - **Deployment-Target:** iOS 17
 
 ## Funktionsumfang
 
 - Zwei Tagebücher (Schwangerschaft/Entwicklung) mit dynamischen Feldern
-- Tages-, Monats-, Favoriten- und Galerie-Ansichten, zufälliger Tag
+- Hauptansicht wie im Web: Reiter Start, Tag, Monat, Favoriten, Galerie;
+  Start zeigt die letzten Einträge und „Stöbern“ (zufälliger Tag, alle Bilder,
+  Favoriten, Papierkorb)
 - Eintrag erstellen mit Fotos/Videos (Fotomediathek, Kamera), Upload-Fortschritt
 - Datenquellen: lokal (SQLite + Medienordner) oder Server-API
   (API-Key, mTLS-Client-Zertifikat oder Cloudflare Service Token;
@@ -21,6 +23,39 @@ komplett lokal oder gegen eine eigene Server-API.
 - ZIP-Backup/-Wiederherstellung (Format kompatibel zur Flutter-App;
   geschrieben als STORE, gelesen werden STORE und DEFLATE)
 - Einmaliger Import lokaler Einträge zur Server-API (mit Duplikatschutz)
+
+## Gestaltung
+
+Die Oberfläche folgt dem Designsystem „Minze & Honig 2.0“ (eigenes Repo
+`DesignGuide`) und fühlt sich an wie das HelloBaby im Web: Farbe als Signal
+statt Fläche, genau eine Hauptaktion je Ansicht, Haarlinien statt Schatten,
+Hell und Dunkel folgen dem System. iOS-Eigenheiten bleiben, wo sie der
+Bedienung helfen: Navigation mit Zurück-Geste, große Titel auf Unterseiten,
+Blätter für Datumswahl und Erklärungen, Ziehen zum Aktualisieren.
+
+- `MhTheme.swift`: Rollen-Tokens hell/dunkel (aus `design-tokens.json`) als
+  dynamische Farben, Typo-Skala mit Dynamic Type (`.mhText(.h1)` …), Radien,
+  Abstände; `MhDarstellung.einrichten()` passt Navigationsleiste und
+  Segmente beim Start an.
+- `MhBausteine.swift`: gemeinsame Bausteine (Kopf, Button-Stile, Segmente,
+  Reiter, Auswahl, Karte, Listenzeile, Marke, Hinweis, Leerzustand, Feld).
+- `Bausteine.swift`: App-eigene Teile (Datumsformate, Toast „Eintrag
+  gespeichert“, Blätterzeile, Feldrahmen, Zustands-Ansichten).
+- `Fonts/Figtree-*.ttf`: Figtree 400/500/600, eingetragen unter `UIAppFonts`
+  in `AppInfo.plist`; Lizenz in `licenses/Figtree-OFL.txt`.
+- `Assets.xcassets/Mh*.imageset`: Liniensymbole (24er-Raster, Strich 1,5) als
+  Vektor-Vorlagen, eingefärbt über die Vordergrundfarbe.
+- `AccentColor`: die Hauptaktion (Minze-700, im Dunkeln Minze-400). Das
+  App-Icon bleibt unverändert.
+
+**Bildschirmfotos:** Der Workflow `screenshots.yml` (bei jedem Push auf
+`claude/**` und manuell) fotografiert die wichtigsten Ansichten im
+iOS-Simulator, hell und dunkel, mit normaler und großer Schrift, und legt sie
+als Artefakt `bildschirmfotos` ab. Die Daten dafür sind erfunden: Mit dem
+Launch-Argument `-MhBildschirmfotos 1` legt `Bildschirmfotodaten.swift` im
+lokalen Modus und nur bei leerer Datenbank ein paar Einträge mit erzeugten
+Bildern an; Name im Titel und Personen kommen als Launch-Argumente und werden
+nicht gespeichert.
 
 ## Datenübernahme von der Flutter-App
 
@@ -99,7 +134,7 @@ ist das an der Antwort auf die erste Anmeldung: `400` ohne das Feld
 
 Der Server löscht einen Eintrag nicht sofort: Zeile und Medien liegen 30 Tage
 in einem Papierkorb und verschwinden erst danach endgültig. Die App zeigt ihn
-auf dem Startbildschirm (nur in den Server-Modi – die lokale Ablage hebt
+auf dem Startbildschirm unter „Stöbern“ (nur in den Server-Modi – die lokale Ablage hebt
 nichts auf) für beide Tagebücher zugleich, mit „Wiederherstellen“ und
 „Endgültig löschen“.
 
@@ -290,8 +325,14 @@ Der Code ist unter `SWIFT_STRICT_CONCURRENCY=complete` warnungsfrei.
 
 ## CI
 
+- `.github/workflows/ci.yml` (Pull Requests, `main`): Release-Build ohne
+  Signierung, prüft die Info.plist-Schlüssel im gebauten Bundle.
+- `.github/workflows/tests.yml` (Push auf `main` und `claude/**`): Unit-Tests
+  im Simulator gegen `ci/upload_attrappe.py`.
+- `.github/workflows/screenshots.yml` (Push auf `claude/**`, manuell):
+  Bildschirmfotos, siehe „Gestaltung“.
 - `.github/workflows/build-ipa.yml` (manuell): unsignierte IPA als
-  GitHub-Release (`v3.0.3-<run>`), zum Sideloading.
+  GitHub-Release (`v3.4.0-<run>`), zum Sideloading.
 - `.github/workflows/upload-app-store.yml` (manuell): signierte IPA nach
   App Store Connect / TestFlight. Benötigt das GitHub Environment
   `app-store` mit denselben sechs Secrets wie im früheren Flutter-Repo:
