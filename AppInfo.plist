@@ -12,5 +12,14 @@
 	     und mergt die INFOPLIST_KEY_*-Werte hinein. -->
 	<key>UIFileSharingEnabled</key>
 	<true/>
+	<!-- Schrift Figtree (SIL OFL, Lizenz in licenses/Figtree-OFL.txt). Die
+	     Dateien liegen in HelloBaby/Fonts und landen über den
+	     synchronisierten Ordner flach im Bundle. -->
+	<key>UIAppFonts</key>
+	<array>
+		<string>Figtree-Regular.ttf</string>
+		<string>Figtree-Medium.ttf</string>
+		<string>Figtree-SemiBold.ttf</string>
+	</array>
 </dict>
 </plist>

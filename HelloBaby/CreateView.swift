@@ -3,8 +3,10 @@ import PhotosUI
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// Formular „Eintrag erstellen“: dynamische Tagebuch-Felder, Datum, Ersteller,
-/// Medien (Fotomediathek + Kamera) und Upload-Fortschritt – wie die Flutter-App.
+/// Formular „Neuer Eintrag“ wie im Web: Felder mit Label darüber, Optionales
+/// als „optional“ markiert, Ersteller als Auswahl, Medien (Fotomediathek und
+/// Kamera) als Zweitbuttons, Upload-Fortschritt und genau eine Hauptaktion
+/// „Eintrag speichern“.
 struct CreateView: View {
 
   let initialDate: String?
@@ -25,162 +27,73 @@ struct CreateView: View {
   @StateObject private var upload = UploadFortschritt()
   @State private var meldung: String?
   @State private var zeigeErstellerHinweis = false
-  @State private var zumEinstellungenNavigieren = false
+  @State private var zeigeDatumswahl = false
 
   private let api = ApiClient.shared
   private var diary: Diary { kDiaries[AppSettings.activeDiary] ?? kDiaries[kDefaultDiary]! }
 
   var body: some View {
-    Form {
-      Section {
-        DatePicker("Datum", selection: $datum, displayedComponents: .date)
-      }
+    ScrollView {
+      VStack(alignment: .leading, spacing: Mh.abstand4) {
+        Text(diary.title)
+          .mhText(.small)
+          .foregroundStyle(Mh.textSecondary)
 
-      Section("Einträge") {
+        datumsFeld
+
+        // Felder des Tagebuchs: Pflichtfeld ohne Zusatz, alles andere „optional“.
         ForEach(diary.fields, id: \.key) { feld in
-          if feld.textarea {
-            VStack(alignment: .leading, spacing: 4) {
-              Text(feld.required ? "\(feld.label) *" : feld.label)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-              TextEditor(text: bindung(feld.key))
-                .frame(minHeight: 80)
-            }
-          } else {
-            HStack {
-              Text(feld.required ? "\(feld.label) *" : feld.label)
-              TextField("", text: bindung(feld.key))
-                .multilineTextAlignment(.trailing)
-                .keyboardType(feld.numeric ? .decimalPad : .default)
-              if !feld.unit.isEmpty {
-                Text(feld.unit).foregroundStyle(.secondary)
-              }
-            }
-          }
-        }
-      }
-
-      Section("Ersteller *") {
-        if nutzer.isEmpty {
-          Text("Noch keine Person angelegt – in den Einstellungen unter „Personen“ anlegen.")
-            .font(.footnote)
-            .foregroundStyle(.secondary)
-          NavigationLink(value: Ziel.settings) {
-            Label("Zu den Einstellungen", systemImage: "person.badge.plus")
-          }
-        } else {
-          Picker("Ersteller", selection: $vonName) {
-            Text("Bitte wählen").tag("")
-            ForEach(nutzer, id: \.self) { name in
-              Text(name).tag(name)
-            }
-          }
-        }
-      }
-
-      Section("Medien") {
-        PhotosPicker(
-          selection: $fotoAuswahl, matching: .any(of: [.images, .videos])
-        ) {
-          Label("Aus der Mediathek", systemImage: "photo.on.rectangle")
-        }
-        Button {
-          zeigeKamera = true
-        } label: {
-          Label("Kamera", systemImage: "camera")
+          eingabe(feld)
         }
 
-        if !medien.isEmpty || medienLadenAnzahl > 0 {
-          ScrollView(.horizontal) {
-            HStack(spacing: 8) {
-              ForEach(medien) { medium in
-                ZStack(alignment: .topTrailing) {
-                  vorschau(medium)
-                    .frame(width: 90, height: 90)
-                    .clipShape(RoundedRectangle(cornerRadius: 8))
-                  Button {
-                    medien.removeAll { $0.id == medium.id }
-                    Self.loesche([medium])
-                  } label: {
-                    Image(systemName: "xmark.circle.fill")
-                      .foregroundStyle(.white, .red)
-                  }
-                  .padding(2)
-                }
-              }
-              // Platzhalter für Medien, die noch übernommen werden.
-              ForEach(0..<medienLadenAnzahl, id: \.self) { _ in
-                VStack(spacing: 6) {
-                  ProgressView()
-                  Text("Übernehme…")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                }
-                .frame(width: 90, height: 90)
-                .background(Color.primary.opacity(0.06))
-                .clipShape(RoundedRectangle(cornerRadius: 8))
-              }
-            }
-          }
-        }
-        if medienLadenAnzahl > 0 {
-          Text("Medien werden übernommen – bitte kurz warten.")
-            .font(.footnote)
-            .foregroundStyle(.secondary)
-        }
-      }
+        erstellerFeld
+        medienFeld
 
-      if speichert, !medien.isEmpty {
-        Section {
-          VStack(alignment: .leading, spacing: 8) {
-            if let fortschritt = upload.wert, fortschritt < 1 {
-              Text("Medien werden hochgeladen… \(Int(fortschritt * 100))%")
-              ProgressView(value: fortschritt)
-            } else {
-              Text(upload.wert == nil ? "Upload wird vorbereitet…" : "Medien werden verarbeitet…")
-              ProgressView()
-            }
-          }
-          .font(.footnote)
+        if speichert, !medien.isEmpty {
+          fortschritt
         }
-      }
 
-      Section {
+        // Die eine Hauptaktion
         Button {
           speichern()
         } label: {
-          HStack {
+          HStack(spacing: Mh.abstand2) {
             if speichert {
-              ProgressView().controlSize(.small)
-            } else {
-              Image(systemName: "square.and.arrow.down")
+              ProgressView().controlSize(.small).tint(Mh.textDisabled)
             }
             Text(
               medienLadenAnzahl > 0
-                ? "Medien werden übernommen…"
-                : (speichert ? "Speichern…" : "Speichern")
-            )
-            .bold()
+                ? "Medien werden übernommen …"
+                : (speichert ? "Wird gespeichert …" : "Eintrag speichern"))
           }
-          .frame(maxWidth: .infinity)
         }
+        .buttonStyle(MhHauptButtonStil(breit: true))
         .disabled(speichert || medienLadenAnzahl > 0)
+        .padding(.top, Mh.abstand2)
       }
+      .padding(.horizontal, Mh.rand)
+      .padding(.top, Mh.abstand1)
+      .padding(.bottom, Mh.abstand8)
+      .hbBreite()
     }
-    .navigationTitle("\(diary.title): Eintrag")
-    .navigationBarTitleDisplayMode(.inline)
+    .scrollDismissesKeyboard(.interactively)
+    .background(Mh.bg.ignoresSafeArea())
+    .navigationTitle("Neuer Eintrag")
+    .navigationBarTitleDisplayMode(.large)
+    .sheet(isPresented: $zeigeDatumswahl) {
+      HbDatumswahl(datum: $datum)
+    }
+    // Personen können in den Einstellungen dazugekommen sein.
+    .onAppear {
+      nutzer = AppSettings.users
+      if !nutzer.contains(vonName) { vonName = Self.vorauswahl(nutzer) }
+    }
     .task {
-      if let initialDate, let start = DayView.datum(initialDate) {
+      if let initialDate, let start = HbDatum.datum(initialDate) {
         datum = start
       }
       nutzer = AppSettings.users
-      let standard = AppSettings.defaultUser
-      let zuletzt = AppSettings.selectedUser
-      if nutzer.contains(standard) {
-        vonName = standard
-      } else if nutzer.contains(zuletzt) {
-        vonName = zuletzt
-      }
+      if !nutzer.contains(vonName) { vonName = Self.vorauswahl(nutzer) }
       if werte.isEmpty {
         for feld in diary.fields { werte[feld.key] = "" }
       }
@@ -205,14 +118,177 @@ struct CreateView: View {
     } message: {
       Text(meldung ?? "")
     }
-    .alert("Kein Ersteller ausgewählt", isPresented: $zeigeErstellerHinweis) {
+    .alert("Wer schreibt den Eintrag?", isPresented: $zeigeErstellerHinweis) {
       Button("OK", role: .cancel) {}
     } message: {
       Text(
         nutzer.isEmpty
           ? "Es ist noch keine Person angelegt. Lege in den Einstellungen mindestens "
             + "eine Person an, um sie hier als Ersteller auswählen zu können."
-          : "Bitte wähle einen Ersteller aus.")
+          : "Bitte wähle aus, von wem der Eintrag ist.")
+    }
+  }
+
+  /// Standard-Person vor der zuletzt gewählten; sonst niemand.
+  private static func vorauswahl(_ nutzer: [String]) -> String {
+    let standard = AppSettings.defaultUser
+    let zuletzt = AppSettings.selectedUser
+    if nutzer.contains(standard) { return standard }
+    if nutzer.contains(zuletzt) { return zuletzt }
+    return ""
+  }
+
+  private static func datumText(_ datum: Date) -> String {
+    let formatter = DateFormatter()
+    formatter.locale = Locale(identifier: "de_DE")
+    formatter.dateFormat = "EEEE, dd.MM.yyyy"
+    return formatter.string(from: datum)
+  }
+
+  /// Datum: sieht aus wie ein Feld, öffnet die Datumsauswahl.
+  private var datumsFeld: some View {
+    MhFeld("Datum") {
+      Button {
+        zeigeDatumswahl = true
+      } label: {
+        HStack(spacing: Mh.abstand2) {
+          Text(Self.datumText(datum))
+            .frame(maxWidth: .infinity, alignment: .leading)
+          MhSymbol("MhCalendar").foregroundStyle(Mh.textSecondary)
+        }
+        .hbFeldRahmen()
+        .contentShape(Rectangle())
+      }
+      .buttonStyle(.plain)
+      .accessibilityLabel("Datum, \(Self.datumText(datum))")
+      .accessibilityHint("Datum ändern")
+    }
+  }
+
+  private func eingabe(_ feld: DiaryField) -> some View {
+    MhFeld(feld.label, zusatz: feld.required ? nil : "optional") {
+      if feld.textarea {
+        TextEditor(text: bindung(feld.key))
+          .scrollContentBackground(.hidden)
+          .frame(minHeight: 96)
+          .padding(.horizontal, -5)
+          .hbFeldRahmen(mehrzeilig: true)
+          .accessibilityLabel(feld.label)
+      } else {
+        HStack(spacing: Mh.abstand2) {
+          TextField("", text: bindung(feld.key))
+            .keyboardType(feld.numeric ? .decimalPad : .default)
+            .accessibilityLabel(feld.label)
+          if !feld.unit.isEmpty {
+            Text(feld.unit).foregroundStyle(Mh.textSecondary)
+          }
+        }
+        .hbFeldRahmen()
+      }
+    }
+  }
+
+  /// Ersteller als Auswahl-Chips; ohne Personen der Weg in die Einstellungen.
+  private var erstellerFeld: some View {
+    MhFeld(
+      "Von",
+      hinweis: nutzer.isEmpty ? "Personen legst du in den Einstellungen an." : nil
+    ) {
+      if nutzer.isEmpty {
+        NavigationLink(value: Ziel.settings) {
+          MhButtonInhalt("Person anlegen", symbol: "MhUserPlus", symbolGroesse: 18)
+        }
+        .buttonStyle(.mhText)
+      } else {
+        HbReihe {
+          ForEach(nutzer, id: \.self) { name in
+            MhAuswahl(name, gewaehlt: vonName == name) { vonName = name }
+          }
+        }
+      }
+    }
+  }
+
+  private var medienFeld: some View {
+    MhFeld("Fotos und Videos", zusatz: "optional") {
+      VStack(alignment: .leading, spacing: Mh.abstand2) {
+        HbReihe(abstand: Mh.abstand2) {
+          PhotosPicker(
+            selection: $fotoAuswahl, matching: .any(of: [.images, .videos])
+          ) {
+            MhButtonInhalt("Auswählen", symbol: "MhImage", symbolGroesse: 18)
+          }
+          .buttonStyle(.mhZweit)
+          Button {
+            zeigeKamera = true
+          } label: {
+            MhButtonInhalt("Kamera", symbol: "MhCamera", symbolGroesse: 18)
+          }
+          .buttonStyle(.mhZweit)
+        }
+
+        if !medien.isEmpty || medienLadenAnzahl > 0 {
+          ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 6) {
+              ForEach(medien) { medium in
+                vorschau(medium)
+                  .frame(width: 88, height: 88)
+                  .background(Mh.surfaceSubtle)
+                  .clipShape(RoundedRectangle(cornerRadius: Mh.radiusSm, style: .continuous))
+                  .overlay(alignment: .topTrailing) {
+                    Button {
+                      medien.removeAll { $0.id == medium.id }
+                      Self.loesche([medium])
+                    } label: {
+                      MhSymbol("MhClose", groesse: 14)
+                        .foregroundStyle(Color.white)
+                        .frame(width: 24, height: 24)
+                        .background(Circle().fill(Color.black.opacity(0.6)))
+                        .frame(width: Mh.touch, height: Mh.touch, alignment: .topTrailing)
+                        .padding(4)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Entfernen")
+                  }
+              }
+              // Platzhalter für Medien, die noch übernommen werden.
+              ForEach(0..<medienLadenAnzahl, id: \.self) { _ in
+                ProgressView()
+                  .tint(Mh.primary)
+                  .frame(width: 88, height: 88)
+                  .background(Mh.surfaceSubtle)
+                  .clipShape(RoundedRectangle(cornerRadius: Mh.radiusSm, style: .continuous))
+              }
+            }
+          }
+        }
+        if medienLadenAnzahl > 0 {
+          Text("Medien werden übernommen, bitte kurz warten.")
+            .mhText(.small)
+            .foregroundStyle(Mh.textSecondary)
+        }
+      }
+    }
+  }
+
+  /// Upload-Fortschritt: Text in Nebentextfarbe, darunter ein dünner Balken.
+  private var fortschritt: some View {
+    VStack(alignment: .leading, spacing: Mh.abstand2) {
+      if let wert = upload.wert, wert < 1 {
+        Text("Medien werden hochgeladen · \(Int(wert * 100)) %")
+          .mhText(.small)
+          .monospacedDigit()
+          .foregroundStyle(Mh.textSecondary)
+        MhBalken(anteil: wert, farbe: Mh.primary)
+      } else {
+        HStack(spacing: Mh.abstand2) {
+          ProgressView().controlSize(.small).tint(Mh.primary)
+          Text(upload.wert == nil ? "Upload wird vorbereitet …" : "Medien werden verarbeitet …")
+            .mhText(.small)
+            .foregroundStyle(Mh.textSecondary)
+        }
+      }
     }
   }
 
@@ -227,16 +303,14 @@ struct CreateView: View {
     if medium.istVideo {
       ZStack {
         Rectangle().fill(Color.black.opacity(0.85))
-        Image(systemName: "play.circle.fill")
-          .font(.title)
-          .foregroundStyle(.white)
+        HbVideoMarke()
       }
     } else if let bild = MediaThumb.vorschaubild(pfad: medium.url.path) {
       // 90x90-Kachel – die volle Kameraauflösung dafür zu dekodieren, wäre
       // derselbe Speicherfehler wie früher im Galerie-Grid.
       Image(uiImage: bild).resizable().scaledToFill()
     } else {
-      Rectangle().fill(Color.black.opacity(0.1))
+      Rectangle().fill(Mh.surfaceSubtle)
     }
   }
 
@@ -277,14 +351,14 @@ struct CreateView: View {
 
   private func speichern() {
     guard medienLadenAnzahl == 0 else {
-      meldung = "Bitte warten – Medien werden noch übernommen."
+      meldung = "Bitte kurz warten, die Medien werden noch übernommen."
       return
     }
-    let pflichtFehlt = diary.fields.contains {
+    let fehlend = diary.fields.filter {
       $0.required && (werte[$0.key] ?? "").trimmingCharacters(in: .whitespaces).isEmpty
     }
-    if pflichtFehlt {
-      meldung = "Bitte alle Pflichtfelder (*) ausfüllen."
+    if !fehlend.isEmpty {
+      meldung = "Bitte \(fehlend.map { "„\($0.label)“" }.joined(separator: " und ")) ausfüllen."
       return
     }
     if vonName.isEmpty {
@@ -302,7 +376,7 @@ struct CreateView: View {
           fields[feld.key] = (werte[feld.key] ?? "").trimmingCharacters(in: .whitespaces)
         }
         _ = try await api.createEntry(
-          kalenderDatum: DayView.iso(datum),
+          kalenderDatum: HbDatum.iso(datum),
           fields: fields,
           vonName: vonName,
           images: medien.map(\.url),
@@ -315,11 +389,12 @@ struct CreateView: View {
         Self.loesche(medien)
         medien = []
         speichert = false
+        AppMeldung.shared.zeige("Eintrag gespeichert")
         dismiss()
       } catch {
         speichert = false
         upload.wert = nil
-        meldung = "Fehler: \(error.localizedDescription)"
+        meldung = "Speichern fehlgeschlagen: \(error.localizedDescription)"
       }
     }
   }

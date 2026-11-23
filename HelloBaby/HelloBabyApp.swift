@@ -1,12 +1,9 @@
 import SwiftUI
 
-/// Navigationsziele der App.
+/// Navigationsziele der App. Tag, Monat, Favoriten und Galerie sind Reiter
+/// der Hauptansicht (`HomeView`) und keine eigenen Ziele.
 enum Ziel: Hashable {
   case create(initialDate: String?)
-  case day(initialDate: String?)
-  case month
-  case favorites
-  case imageFeed
   case gallery(folder: String)
   case video(url: String)
   case settings
@@ -17,8 +14,11 @@ enum Ziel: Hashable {
 struct HelloBabyApp: App {
 
   @State private var pfad: [Ziel] = []
+  @ObservedObject private var appMeldung = AppMeldung.shared
 
   init() {
+    // Figtree und die neutralen Leisten von „Minze & Honig 2.0“.
+    MhDarstellung.einrichten()
     AppSettings.migrationAusfuehren()
     // Ohne mindestens eine Datei blendet iOS den App-Ordner in der
     // „Dateien“-App aus – dort liegen aber client.crt/client.key.
@@ -52,14 +52,6 @@ struct HelloBabyApp: App {
             switch ziel {
             case .create(let initialDate):
               CreateView(initialDate: initialDate)
-            case .day(let initialDate):
-              DayView(initialDate: initialDate)
-            case .month:
-              MonthView()
-            case .favorites:
-              FavoritesView()
-            case .imageFeed:
-              ImageFeedView()
             case .gallery(let folder):
               GalleryView(folder: folder)
             case .video(let url):
@@ -71,7 +63,18 @@ struct HelloBabyApp: App {
             }
           }
       }
-      .tint(Hb.accentDeep)
+      .tint(Mh.primary)
+      // Grundschrift für alles, was keinen eigenen Stil setzt.
+      .font(MhTextStil.body.font)
+      .foregroundStyle(Mh.text)
+      // Kurze Meldungen („Eintrag gespeichert“) über allen Ansichten.
+      .overlay(alignment: .bottom) {
+        if let text = appMeldung.text {
+          HbToast(text: text)
+            .transition(.move(edge: .bottom).combined(with: .opacity))
+        }
+      }
+      .animation(.easeOut(duration: 0.2), value: appMeldung.text)
     }
   }
 }

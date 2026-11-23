@@ -128,33 +128,27 @@ struct SettingsView: View {
   private let certSource = CertSource()
 
   var body: some View {
-    Form {
-      personenSektion
-      titelSektion
-      datenquelleSektion
-      if mode == .local {
-        backupSektion
-      } else {
-        serverSektion
-        importSektion
-      }
-      Section {
-        if mode != .local {
-          Button {
-            infoDialog = true
-          } label: {
-            Label("Aufbau API", systemImage: "cloud")
-          }
+    ScrollView {
+      VStack(alignment: .leading, spacing: 0) {
+        personenSektion
+        titelSektion
+        datenquelleSektion
+        if mode == .local {
+          backupSektion
+        } else {
+          serverSektion
+          importSektion
         }
-        Button {
-          dbDialog = true
-        } label: {
-          Label("Aufbau Datenbank", systemImage: "cylinder.split.1x2")
-        }
+        erklaerungSektion
       }
+      .padding(.horizontal, Mh.rand)
+      .padding(.bottom, Mh.abstand8)
+      .hbBreite()
     }
+    .scrollDismissesKeyboard(.interactively)
+    .background(Mh.bg.ignoresSafeArea())
     .navigationTitle("Einstellungen")
-    .navigationBarTitleDisplayMode(.inline)
+    .navigationBarTitleDisplayMode(.large)
     .task { pruefeZertifikate() }
     .alert("Person hinzufügen", isPresented: $personDialog) {
       TextField("Name", text: $neuerName)
@@ -188,36 +182,10 @@ struct SettingsView: View {
           + "diesen Server importierte Einträge werden übersprungen.")
     }
     .sheet(isPresented: $infoDialog) {
-      NavigationStack {
-        ScrollView {
-          Text(apiInfoText)
-            .font(.callout)
-            .padding()
-        }
-        .navigationTitle("Aufbau API")
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-          ToolbarItem(placement: .topBarTrailing) {
-            Button("Schließen") { infoDialog = false }
-          }
-        }
-      }
+      HbTextBlatt(titel: "Aufbau der API", text: apiInfoText)
     }
     .sheet(isPresented: $dbDialog) {
-      NavigationStack {
-        ScrollView {
-          Text(dbInfoText)
-            .font(.callout)
-            .padding()
-        }
-        .navigationTitle("Aufbau Datenbank")
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-          ToolbarItem(placement: .topBarTrailing) {
-            Button("Schließen") { dbDialog = false }
-          }
-        }
-      }
+      HbTextBlatt(titel: "Aufbau der Datenbank", text: dbInfoText)
     }
     .sheet(
       isPresented: .init(
@@ -261,76 +229,72 @@ struct SettingsView: View {
   // MARK: - Sektionen
 
   private var personenSektion: some View {
-    Section("Personen") {
+    VStack(alignment: .leading, spacing: 0) {
+      MhGruppenLabel("Personen")
       if nutzer.isEmpty {
         Text(
-          "Noch keine Person angelegt. Lege mindestens eine Person an, um sie "
-            + "beim Erstellen eines Eintrags als Ersteller auswählen zu können."
+          "Noch keine Person angelegt. Lege mindestens eine an, dann kannst du "
+            + "sie beim Eintrag auswählen."
         )
-        .font(.footnote)
-        .foregroundStyle(.secondary)
+        .mhText(.small)
+        .foregroundStyle(Mh.textSecondary)
+        .padding(.bottom, Mh.abstand2)
       }
-      ForEach(nutzer, id: \.self) { name in
-        HStack {
-          Image(systemName: "person")
-          VStack(alignment: .leading) {
-            Text(name)
-            if name == standardNutzer {
-              Text("Standard").font(.caption).foregroundStyle(.secondary)
-            }
-          }
-          Spacer()
-          Button {
+      ForEach(Array(nutzer.enumerated()), id: \.element) { index, name in
+        if index > 0 { MhTrennlinie() }
+        MhListenZeile(
+          name,
+          untertitel: name == standardNutzer ? "Wird beim Eintrag vorgewählt" : nil,
+          symbol: "MhUser"
+        ) {
+          MhAuswahl("Standard", gewaehlt: name == standardNutzer) {
             standardNutzer = standardNutzer == name ? "" : name
             AppSettings.defaultUser = standardNutzer
-          } label: {
-            Image(systemName: name == standardNutzer ? "checkmark.square.fill" : "square")
-              .foregroundStyle(Hb.accentDeep)
           }
-          .buttonStyle(.plain)
-          Button {
+          MhSymbolButton("MhTrash", beschreibung: "\(name) entfernen") {
             entferne(name)
-          } label: {
-            Image(systemName: "trash")
-              .foregroundStyle(.red.opacity(0.7))
           }
-          .buttonStyle(.plain)
+          .padding(.trailing, -Mh.abstand3)
         }
       }
       Button {
         personDialog = true
       } label: {
-        Label("Person hinzufügen", systemImage: "person.badge.plus")
+        MhButtonInhalt("Person hinzufügen", symbol: "MhUserPlus", symbolGroesse: 18)
       }
+      .buttonStyle(.mhZweit)
+      .padding(.top, Mh.abstand2)
     }
   }
 
   private var titelSektion: some View {
-    Section("App-Titel") {
-      TextField(AppSettings.defaultAppName, text: $appName)
-        .onChange(of: appName) { _, neu in AppSettings.appName = neu }
-      Text("Die App heißt dann „Hello NAME!“.")
-        .font(.footnote)
-        .foregroundStyle(.secondary)
+    VStack(alignment: .leading, spacing: 0) {
+      MhGruppenLabel("Name im Titel")
+      MhFeld("Name", hinweis: "Die App heißt dann „Hello \(AppSettings.appName)!“.") {
+        TextField(AppSettings.defaultAppName, text: $appName)
+          .onChange(of: appName) { _, neu in AppSettings.appName = neu }
+          .hbFeldRahmen()
+      }
     }
   }
 
   private var datenquelleSektion: some View {
-    Section("Datenspeicher") {
+    VStack(alignment: .leading, spacing: 0) {
+      MhGruppenLabel("Datenspeicher")
       auswahl(
         gewaehlt: mode == .local,
         titel: "Lokal auf diesem Gerät",
-        untertitel: "SQLite-Datenbank und lokaler Medienordner."
+        untertitel: "SQLite-Datenbank und lokaler Medienordner"
       ) {
         mode = .local
         AppSettings.mode = .local
         api.reset()
       }
+      MhTrennlinie()
       auswahl(
         gewaehlt: mode != .local,
-        titel: "API",
-        untertitel: "Server-API mit API-Key, Client-Zertifikat oder "
-          + "Cloudflare Service Token."
+        titel: "Server",
+        untertitel: "API mit API-Key, Client-Zertifikat oder Cloudflare Service Token"
       ) {
         if mode == .local {
           mode = .apiKey
@@ -342,114 +306,118 @@ struct SettingsView: View {
   }
 
   private var backupSektion: some View {
-    Section("Backup") {
+    VStack(alignment: .leading, spacing: Mh.abstand2) {
+      MhGruppenLabel("Sicherung")
       Button {
         backupErstellen()
       } label: {
-        HStack {
+        HStack(spacing: Mh.abstand2) {
           if exportiert {
-            ProgressView().controlSize(.small)
+            ProgressView().controlSize(.small).tint(Mh.primary)
           } else {
-            Image(systemName: "icloud.and.arrow.up")
+            MhSymbol("MhSave", groesse: 18)
           }
-          Text(exportiert ? "Backup wird erstellt…" : "Backup erstellen & teilen")
+          Text(exportiert ? "Backup wird erstellt …" : "Backup erstellen und teilen")
         }
       }
+      .buttonStyle(MhZweitButtonStil(breit: true))
       .disabled(exportiert || restauriert)
 
       Button {
         restoreNachfrage = true
       } label: {
-        HStack {
+        HStack(spacing: Mh.abstand2) {
           if restauriert {
-            ProgressView().controlSize(.small)
+            ProgressView().controlSize(.small).tint(Mh.primary)
           } else {
-            Image(systemName: "arrow.counterclockwise")
+            MhSymbol("MhUndo", groesse: 18)
           }
-          Text(restauriert ? "Backup wird wiederhergestellt…" : "Backup wiederherstellen")
+          Text(restauriert ? "Backup wird wiederhergestellt …" : "Backup wiederherstellen")
         }
       }
+      .buttonStyle(MhZweitButtonStil(breit: true))
       .disabled(exportiert || restauriert)
 
-      Text("Das Backup lässt sich z. B. in iCloud Drive oder Google Drive ablegen.")
-        .font(.footnote)
-        .foregroundStyle(.secondary)
+      Text("Das Backup lässt sich zum Beispiel in iCloud Drive oder Google Drive ablegen.")
+        .mhText(.small)
+        .foregroundStyle(Mh.textSecondary)
     }
   }
 
   private var serverSektion: some View {
-    Group {
-      Section("Authentifizierung") {
-        auswahl(
-          gewaehlt: mode == .apiKey,
-          titel: "API-Key",
-          untertitel: "Empfohlen. Key als X-API-Key-Header."
-        ) {
-          mode = .apiKey
-          AppSettings.mode = .apiKey
-          api.reset()
-        }
-        auswahl(
-          gewaehlt: mode == .mtls,
-          titel: "Client-Zertifikat (mTLS)",
-          untertitel: "Authentifizierung per client.crt/client.key"
-        ) {
-          mode = .mtls
-          AppSettings.mode = .mtls
-          api.reset()
-          pruefeZertifikate()
-        }
-        auswahl(
-          gewaehlt: mode == .cloudflare,
-          titel: "Cloudflare Access",
-          untertitel: "Service Token, API-Key optional zusätzlich"
-        ) {
-          mode = .cloudflare
-          AppSettings.mode = .cloudflare
-          api.reset()
-        }
+    VStack(alignment: .leading, spacing: 0) {
+      MhGruppenLabel("Anmeldung")
+      auswahl(
+        gewaehlt: mode == .apiKey,
+        titel: "API-Key",
+        untertitel: "Empfohlen, Key als X-API-Key-Header"
+      ) {
+        mode = .apiKey
+        AppSettings.mode = .apiKey
+        api.reset()
+      }
+      MhTrennlinie()
+      auswahl(
+        gewaehlt: mode == .mtls,
+        titel: "Client-Zertifikat (mTLS)",
+        untertitel: "Anmeldung per client.crt und client.key"
+      ) {
+        mode = .mtls
+        AppSettings.mode = .mtls
+        api.reset()
+        pruefeZertifikate()
+      }
+      MhTrennlinie()
+      auswahl(
+        gewaehlt: mode == .cloudflare,
+        titel: "Cloudflare Access",
+        untertitel: "Service Token, API-Key optional zusätzlich"
+      ) {
+        mode = .cloudflare
+        AppSettings.mode = .cloudflare
+        api.reset()
       }
 
-      Section("Server") {
-        TextField("https://baby.example.org", text: $serverUrl)
-          .keyboardType(.URL)
-          .textInputAutocapitalization(.never)
-          .autocorrectionDisabled()
-          .onChange(of: serverUrl) { _, neu in
-            AppSettings.serverBase = neu
-            api.reset()
-          }
-        Text("Basis-URL ohne /api.")
-          .font(.footnote)
-          .foregroundStyle(.secondary)
+      MhGruppenLabel("Server")
+      VStack(alignment: .leading, spacing: Mh.abstand4) {
+        MhFeld("Server-Adresse", hinweis: "Basis-URL ohne /api, z. B. https://baby.example.org") {
+          TextField("https://baby.example.org", text: $serverUrl)
+            .keyboardType(.URL)
+            .textInputAutocapitalization(.never)
+            .autocorrectionDisabled()
+            .onChange(of: serverUrl) { _, neu in
+              AppSettings.serverBase = neu
+              api.reset()
+            }
+            .hbFeldRahmen()
+        }
 
         if mode == .mtls {
-          HStack {
-            Image(systemName: certsOk ? "checkmark.circle.fill" : "xmark.circle.fill")
-              .foregroundStyle(certsOk ? Hb.accentDeep : .red)
-            VStack(alignment: .leading) {
-              Text(certsOk ? "Zertifikate gefunden" : "Keine Zertifikate gefunden")
-              Text(certLabel)
-                .font(.caption)
-                .foregroundStyle(.secondary)
+          VStack(alignment: .leading, spacing: Mh.abstand2) {
+            MhHinweis(
+              certLabel,
+              titel: certsOk ? "Zertifikate gefunden" : "Keine Zertifikate gefunden",
+              art: certsOk ? .erfolg : .fehler)
+            HbReihe(abstand: Mh.abstand2) {
+              Button {
+                zeigeOrdnerwahl = true
+              } label: {
+                MhButtonInhalt("Ordner wählen", symbol: "MhFolder", symbolGroesse: 18)
+              }
+              .buttonStyle(.mhZweit)
+              Button {
+                pruefeZertifikate()
+                meldung = certsOk ? "Zertifikate gefunden." : "Keine Zertifikate gefunden."
+              } label: {
+                MhButtonInhalt("Erneut prüfen", symbol: "MhRefresh", symbolGroesse: 18)
+              }
+              .buttonStyle(.mhText)
             }
-          }
-          Button {
-            zeigeOrdnerwahl = true
-          } label: {
-            Label("Zertifikats-Ordner wählen", systemImage: "folder")
-          }
-          Button {
-            certSource.nutzeStandardOrdner()
-            pruefeZertifikate()
-          } label: {
-            Label("Standard: App-Ordner (Dateien-App)", systemImage: "folder.badge.gearshape")
-          }
-          Button {
-            pruefeZertifikate()
-            meldung = certsOk ? "Zertifikate gefunden." : "Keine Zertifikate gefunden."
-          } label: {
-            Label("Erneut prüfen", systemImage: "arrow.clockwise")
+            Button("App-Ordner in der Dateien-App verwenden") {
+              certSource.nutzeStandardOrdner()
+              pruefeZertifikate()
+            }
+            .buttonStyle(.mhText)
           }
         }
 
@@ -457,75 +425,125 @@ struct SettingsView: View {
         // Anfrage erst danach an den Server weiter. Beide Hälften sind nötig:
         // mit einer weist Cloudflare genauso ab wie ganz ohne.
         if mode == .cloudflare {
-          SecureField("Client-ID", text: $cfClientId)
-            .textInputAutocapitalization(.never)
-            .autocorrectionDisabled()
-            .onChange(of: cfClientId) { _, neu in
-              AppSettings.cfAccessClientId = neu
-              api.reset()
-            }
-          SecureField("Client-Secret", text: $cfClientSecret)
-            .textInputAutocapitalization(.never)
-            .autocorrectionDisabled()
-            .onChange(of: cfClientSecret) { _, neu in
-              AppSettings.cfAccessClientSecret = neu
-              api.reset()
-            }
-          Text("Beide Teile des Service Tokens. Sie laufen ab, standardmäßig nach einem Jahr.")
-            .font(.footnote)
-            .foregroundStyle(.secondary)
+          MhFeld("Client-ID", hinweis: "Endet üblicherweise auf „.access“.") {
+            SecureField("", text: $cfClientId)
+              .textInputAutocapitalization(.never)
+              .autocorrectionDisabled()
+              .onChange(of: cfClientId) { _, neu in
+                AppSettings.cfAccessClientId = neu
+                api.reset()
+              }
+              .hbFeldRahmen()
+              .accessibilityLabel("Client-ID")
+          }
+          MhFeld(
+            "Client-Secret",
+            hinweis: "Beide Teile des Service Tokens. Sie laufen ab, standardmäßig nach einem Jahr."
+          ) {
+            SecureField("", text: $cfClientSecret)
+              .textInputAutocapitalization(.never)
+              .autocorrectionDisabled()
+              .onChange(of: cfClientSecret) { _, neu in
+                AppSettings.cfAccessClientSecret = neu
+                api.reset()
+              }
+              .hbFeldRahmen()
+              .accessibilityLabel("Client-Secret")
+          }
         }
 
-        SecureField(
-          mode == .apiKey ? "API-Key" : "API-Key (optional)", text: $apiKey
-        )
-        .textInputAutocapitalization(.never)
-        .autocorrectionDisabled()
-        .onChange(of: apiKey) { _, neu in
-          AppSettings.apiKey = neu
-          api.reset()
+        MhFeld("API-Key", zusatz: mode == .apiKey ? nil : "optional") {
+          SecureField("", text: $apiKey)
+            .textInputAutocapitalization(.never)
+            .autocorrectionDisabled()
+            .onChange(of: apiKey) { _, neu in
+              AppSettings.apiKey = neu
+              api.reset()
+            }
+            .hbFeldRahmen()
+            .accessibilityLabel("API-Key")
         }
       }
     }
   }
 
   private var importSektion: some View {
-    Section {
+    VStack(alignment: .leading, spacing: Mh.abstand2) {
+      MhGruppenLabel("Übernahme")
       Button {
         importNachfrage = true
       } label: {
-        HStack {
+        HStack(spacing: Mh.abstand2) {
           if importiert {
-            ProgressView().controlSize(.small)
+            ProgressView().controlSize(.small).tint(Mh.primary)
           } else {
-            Image(systemName: "square.and.arrow.up.on.square")
+            MhSymbol("MhUpload", groesse: 18)
           }
           Text(
             importiert
-              ? "Import \(importStand.0) / \(importStand.1)…"
+              ? "Import \(importStand.0) / \(importStand.1) …"
               : "Lokale Daten importieren")
         }
       }
+      .buttonStyle(MhZweitButtonStil(breit: true))
       .disabled(importiert)
-      Text("Überträgt lokale Einträge einmalig zur eingestellten API.")
-        .font(.footnote)
-        .foregroundStyle(.secondary)
+      Text("Überträgt lokale Einträge einmalig zum eingestellten Server.")
+        .mhText(.small)
+        .foregroundStyle(Mh.textSecondary)
     }
   }
 
+  private var erklaerungSektion: some View {
+    VStack(alignment: .leading, spacing: 0) {
+      MhGruppenLabel("Erklärung")
+      if mode != .local {
+        Button {
+          infoDialog = true
+        } label: {
+          MhListenZeile("Aufbau der API", symbol: "MhCloud", pfeil: true)
+        }
+        .buttonStyle(.plain)
+        MhTrennlinie()
+      }
+      Button {
+        dbDialog = true
+      } label: {
+        MhListenZeile("Aufbau der Datenbank", symbol: "MhInfo", pfeil: true)
+      }
+      .buttonStyle(.plain)
+    }
+  }
+
+  /// Auswahlzeile mit Optionsfeld: Titel, Nebentext, ganze Zeile tippbar.
   private func auswahl(
     gewaehlt: Bool, titel: String, untertitel: String, wirkung: @escaping () -> Void
   ) -> some View {
     Button(action: wirkung) {
-      HStack {
-        Image(systemName: gewaehlt ? "largecircle.fill.circle" : "circle")
-          .foregroundStyle(Hb.accentDeep)
-        VStack(alignment: .leading) {
-          Text(titel).foregroundStyle(.primary)
-          Text(untertitel).font(.caption).foregroundStyle(.secondary)
+      HStack(spacing: Mh.abstand3) {
+        ZStack {
+          Circle()
+            .strokeBorder(gewaehlt ? Mh.primary : Mh.borderStrong, lineWidth: 1.5)
+            .frame(width: 20, height: 20)
+          if gewaehlt {
+            Circle().fill(Mh.primary).frame(width: 10, height: 10)
+          }
         }
+        .frame(width: 24, height: 24)
+        .accessibilityHidden(true)
+        VStack(alignment: .leading, spacing: 2) {
+          Text(titel)
+            .font(.custom(MhSchrift.medium, size: 16, relativeTo: .body))
+            .foregroundStyle(Mh.textStrong)
+          Text(untertitel).mhText(.small).foregroundStyle(Mh.textSecondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
       }
+      .padding(.vertical, Mh.abstand3)
+      .frame(minHeight: 56)
+      .contentShape(Rectangle())
     }
+    .buttonStyle(.plain)
+    .accessibilityAddTraits(gewaehlt ? [.isSelected] : [])
   }
 
   // MARK: - Aktionen
